@@ -17,6 +17,7 @@ from playwright.async_api import Browser, Page, Playwright, async_playwright
 
 from app.core.config import settings
 from app.modules.crawler.proxy_pool import proxy_pool
+from app.modules.crawler.anti_detection import build_stealth_scripts, detect_blocking, random_viewport
 
 logger = logging.getLogger(__name__)
 
@@ -26,25 +27,6 @@ _USER_AGENTS = [
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5_2) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Safari/605.1.15",
-]
-
-# Stealth 反检测初始化脚本
-_STEALTH_INIT_SCRIPTS = [
-    # 隐藏 navigator.webdriver（最关键的检测向量）
-    "Object.defineProperty(navigator, 'webdriver', { get: () => undefined })",
-    # 补充 chrome 对象（正常浏览器存在）
-    "window.chrome = { runtime: {} };",
-    # 覆盖 plugins（自动化的浏览器通常 plugins.length === 0）
-    "Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });",
-    # 覆盖 languages
-    "Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh'] });",
-    # 覆盖权限查询
-    "window.navigator.permissions.query = (() => Promise.resolve({ state: 'granted' }));",
-    # 覆盖 webdriver 标记
-    """Object.defineProperty(navigator, 'webdriver', {
-        get: () => undefined,
-        configurable: true,
-    });""",
 ]
 
 
@@ -148,6 +130,7 @@ class DynamicRenderer:
         wait_selector: str = "body",
         min_content_length: int = 500,
         scroll: bool = True,
+        scroll_rounds_range: tuple[int, int] = (5, 10),
     ) -> dict:
         async with self._semaphore:
             start_ts = time.monotonic()
@@ -161,37 +144,33 @@ class DynamicRenderer:
             proxy_config = {"server": proxy_str} if proxy_str else None
 
             # 上下文隔离：每个 URL 独立 context 或共享
-            if settings.RENDER_CONTEXT_ISOLATION:
-                context = await self._browser.new_context(
-                    user_agent=_random_ua(),
-                    viewport={"width": 1366, "height": 900},
-                    locale="zh-CN",
-                    proxy=proxy_config,
-                )
-            else:
-                context = await self._browser.new_context(
-                    user_agent=_random_ua(),
-                    viewport={"width": 1366, "height": 900},
-                    locale="zh-CN",
-                    proxy=proxy_config,
-                )
-
+            _ua = _random_ua()
+            _vp = random_viewport()
+            context_kwargs = dict(
+                user_agent=_ua,
+                viewport=_vp,
+                locale="zh-CN",
+                proxy=proxy_config,
+                timezone_id="Asia/Shanghai",
+            )
+            context = await self._browser.new_context(**context_kwargs)
             page = await context.new_page()
 
-            # Stealth：注入反检测脚本
+            # Stealth：注入增强反检测脚本
+            response_headers: dict = {}
             if settings.RENDER_STEALTH_ENABLED:
-                for script in _STEALTH_INIT_SCRIPTS:
+                for script in build_stealth_scripts():
                     await context.add_init_script(script)
 
             try:
-                await page.goto(url, wait_until="domcontentloaded", timeout=settings.RENDER_TIMEOUT_MS)
+                resp = await page.goto(url, wait_until="domcontentloaded", timeout=settings.RENDER_TIMEOUT_MS)
                 try:
                     await page.wait_for_selector(wait_selector, timeout=10_000)
                 except Exception:
                     pass
                 if scroll:
-                    # 随机滚动轮数 5-10 轮
-                    scroll_rounds = random.randint(5, 10)
+                    # 随机滚动轮数
+                    scroll_rounds = random.randint(*scroll_rounds_range)
                     await self._auto_scroll(page, scroll_rounds)
                 try:
                     await page.wait_for_load_state("networkidle", timeout=5_000)
@@ -200,6 +179,28 @@ class DynamicRenderer:
                 html = await page.content()
                 title = await page.title()
                 final_url = page.url
+                # 收集响应头用于拦截检测
+                if resp:
+                    try:
+                        response_headers = await resp.all_headers()
+                    except Exception:
+                        pass
+                # 拦截检测
+                status_code = resp.status if resp else 200
+                detection = detect_blocking(html, status_code=status_code, headers=response_headers)
+                if detection.blocked:
+                    logger.warning("anti-detection: %s blocked by %s (confidence=%.2f)", url, detection.block_type, detection.confidence)
+                    if proxy_str:
+                        await proxy_pool.report_fail(proxy_str)
+                    return {
+                        "html": html,
+                        "title": title,
+                        "final_url": final_url,
+                        "ok": False,
+                        "reason": f"BLOCKED:{detection.block_type}",
+                        "block_type": detection.block_type,
+                        "block_confidence": detection.confidence,
+                    }
                 elapsed = (time.monotonic() - start_ts) * 1000
                 if proxy_str:
                     await proxy_pool.report_success(proxy_str, elapsed)

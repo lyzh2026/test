@@ -43,13 +43,23 @@ _RETRYABLE_KEYWORDS = [
     "eof", "protocol error", "net::err_", "connection closed",
 ]
 
+# Blocking types that are retryable (except captcha which requires human intervention)
+_RETRYABLE_BLOCK_TYPES = {"cloudflare", "ratelimit", "generic"}
+
+# Per-domain block counters for adaptive delay
+_domain_block_counts: dict[str, int] = {}
+
 
 def _is_retryable(result: dict) -> bool:
-    """判断错误是否可重试（网络类临时错误可重试，适配器/白名单类不可）。"""
+    """判断错误是否可重试（网络类临时错误、非验证码拦截可重试，适配器/白名单类不可）。"""
     code = result.get("code", 0)
     if code in _RETRYABLE_CODE_PREFIXES:
         return True
     reason = (result.get("reason") or "").lower()
+    # Blocking detection results are retryable (except captcha)
+    if reason.startswith("blocked:"):
+        block_type = reason.replace("blocked:", "").strip()
+        return block_type in _RETRYABLE_BLOCK_TYPES
     for kw in _RETRYABLE_KEYWORDS:
         if kw in reason:
             return True
@@ -184,7 +194,7 @@ async def _run_discovery_and_crawl(
     discovered: set[str] = set()
     failed_details: list[dict] = []
 
-    for entry in entry_urls:
+    async def _discover_one(entry: str):
         try:
             links = await discover_articles(
                 entry_url=entry,
@@ -193,12 +203,18 @@ async def _run_discovery_and_crawl(
                 enable_pagination=True,
                 max_pages=5,
             )
+            return entry, links, None
         except Exception as e:
             logger.warning("discovery failed for %s: %r", entry, e)
-            failed_details.append({"url": entry, "code": 5001, "reason": f"域名发现失败: {e!r}", "stage": "discovery"})
-            continue
-        for item in links:
-            discovered.add(item["url"])
+            return entry, [], e
+
+    disc_results = await asyncio.gather(*[_discover_one(e) for e in entry_urls])
+    for entry, links, error in disc_results:
+        if error:
+            failed_details.append({"url": entry, "code": 5001, "reason": f"域名发现失败: {error!r}", "stage": "discovery"})
+        else:
+            for item in links:
+                discovered.add(item["url"])
 
     # 入口 URL 本身也可能是文章，一并加入
     for entry in entry_urls:
@@ -334,7 +350,8 @@ async def run_crawl_job(task_id: str, urls: list[str]):
 
 
 async def _crawl_one(task_id: str, url: str, *, target_date: date, date_to: date | None = None) -> dict:
-    """带自动重试的外层入口：最多重试 CRAWLER_MAX_RETRIES 次，指数退避。"""
+    """带自动重试的外层入口：最多重试 CRAWLER_MAX_RETRIES 次，指数退避+拦截应对。"""
+    domain = urlparse(url).hostname or "unknown"
     for attempt in range(1, settings.CRAWLER_MAX_RETRIES + 1):
         if task_id in _cancelled_tasks:
             return {"ok": False, "code": 5001, "reason": "任务已取消", "stage": "cancelled"}
@@ -346,10 +363,68 @@ async def _crawl_one(task_id: str, url: str, *, target_date: date, date_to: date
             return result
         if attempt == settings.CRAWLER_MAX_RETRIES or not _is_retryable(result):
             return result
-        wait = settings.CRAWLER_RETRY_BACKOFF_BASE ** attempt
-        logger.info("retry %s/%s for %s (code=%s) in %ss", attempt, settings.CRAWLER_MAX_RETRIES, url, result.get("code"), wait)
+        reason = (result.get("reason") or "").lower()
+        base_wait = settings.CRAWLER_RETRY_BACKOFF_BASE ** attempt
+        extra_wait = 0.0
+        # Anti-detection counter-measures
+        if reason.startswith("blocked:"):
+            block_type = reason.replace("blocked:", "").strip()
+            _domain_block_counts[domain] = _domain_block_counts.get(domain, 0) + 1
+            if block_type == "cloudflare":
+                # Cloudflare: recycle browser + longer wait + proxy already rotated by renderer
+                extra_wait = random.uniform(5.0, 15.0)
+                try:
+                    await renderer._maybe_recycle()
+                    logger.info("anti-detection: recycled browser for cloudflare block on %s", url)
+                except Exception:
+                    pass
+            elif block_type == "ratelimit":
+                # Rate limit: increase domain delay + longer wait
+                extra_wait = 5.0 + _domain_block_counts.get(domain, 0) * 3.0
+                logger.info("anti-detection: increased delay for ratelimit on %s (domain_blocks=%s)", url, _domain_block_counts.get(domain, 0))
+            elif block_type == "generic":
+                extra_wait = random.uniform(2.0, 5.0)
+        wait = base_wait + extra_wait
+        logger.info("retry %s/%s for %s (code=%s, reason=%s) in %.1fs", attempt, settings.CRAWLER_MAX_RETRIES, url, result.get("code"), result.get("reason"), wait)
         await asyncio.sleep(wait)
     return {"ok": False, "code": 5001, "reason": "重试次数耗尽", "stage": "render"}
+
+
+def _dual_filter_pipeline(html: str) -> str:
+    """双管道取长：BM25 管道 vs Pruning 直通，取长策略。
+
+    对多段落文章，BM25 的"最长连续高分区"可能截断严重（132 块→3 块）；
+    Pruning 直通可保留 93% 内容。取长后由 ReadabilityAdapter 做第二道防线。
+    """
+    from app.modules.crawler.content_filter import content_filter_pipeline, Pruning
+
+    # BM25 管道
+    try:
+        bm25_result = content_filter_pipeline(html)
+    except Exception:
+        bm25_result = ""
+
+    # Pruning 直通（跳过 BM25）
+    try:
+        pruned_result = Pruning.prune(html)
+    except Exception:
+        pruned_result = ""
+
+    # 有效性检查
+    bm25_ok = bm25_result and len(bm25_result) >= 100
+    prune_ok = pruned_result and len(pruned_result) >= 100
+
+    if not bm25_ok and not prune_ok:
+        return html
+    if not bm25_ok:
+        return pruned_result
+    if not prune_ok:
+        return bm25_result
+
+    # 取长：如果 Pruning 结果 >= BM25 结果的 80%，选 Pruning（更完整）
+    if len(pruned_result) >= len(bm25_result) * 0.8:
+        return pruned_result
+    return bm25_result
 
 
 async def _crawl_one_attempt(task_id: str, url: str, *, target_date: date, date_to: date | None = None) -> dict:
@@ -387,10 +462,10 @@ async def _crawl_one_attempt(task_id: str, url: str, *, target_date: date, date_
         final_url = rendered.get("final_url") or url
         title = rendered.get("title", "")
 
-        # ====== Content Filter Pipeline ======
+        # ====== Content Filter Pipeline (dual) ======
         if settings.CONTENT_FILTER_ENABLED:
             try:
-                filtered_html = content_filter_pipeline(raw_html)
+                filtered_html = await asyncio.to_thread(_dual_filter_pipeline, raw_html)
                 if not filtered_html or len(filtered_html) < 100:
                     logger.warning("content filter produced empty result for %s, fallback to raw", url)
                     filtered_html = raw_html
@@ -463,7 +538,7 @@ async def _crawl_one_attempt(task_id: str, url: str, *, target_date: date, date_
                 # 缓存
                 if settings.CRAWLER_CACHE_ENABLED and page_cache and next_rendered.get("ok"):
                     _next_html = next_rendered["html"]
-                    _next_filtered = content_filter_pipeline(_next_html) if settings.CONTENT_FILTER_ENABLED else _next_html
+                    _next_filtered = (await asyncio.to_thread(_dual_filter_pipeline, _next_html)) if settings.CONTENT_FILTER_ENABLED else _next_html
                     await page_cache.set(next_url, filtered_html=_next_filtered, title=next_rendered.get("title", ""))
                     next_rendered["html"] = _next_filtered
         except Exception:
@@ -479,14 +554,18 @@ async def _crawl_one_attempt(task_id: str, url: str, *, target_date: date, date_
                 next_draft = await adapter.extract(next_page)
                 if adapter.validate(next_draft):
                     draft.raw_content += f"\n\n{next_draft.raw_content}"
+                    # 合并翻页的图片/附件
+                    if next_draft.extra.get("images"):
+                        draft.extra.setdefault("images", []).extend(next_draft.extra["images"])
+                    if next_draft.extra.get("attachments"):
+                        draft.extra.setdefault("attachments", []).extend(next_draft.extra["attachments"])
                     break
             except Exception:
                 continue
 
     # === 去重：URL 规范化 + MD5 指纹 + SimHash 相似检测 ===
 
-    # 1. URL 规范化去重：去除跟踪参数
-    normalized_url = _normalize_url(page.final_url or url)
+    # 1. URL 规范化去重：去除跟踪参数（用于 original_link 入库）
 
     # 2. MD5 内容指纹
     fingerprint = hashlib.md5(
@@ -505,7 +584,7 @@ async def _crawl_one_attempt(task_id: str, url: str, *, target_date: date, date_
     title_hash = _simhash(draft.original_title.strip())
     if title_hash:
         try:
-            similar_titles = await redis_client.smembers("article_title_hashes")
+            similar_titles = await redis_client.srandmember("article_title_hashes", 100) or []
             for existing_hash_str in similar_titles:
                 existing_hash = int(existing_hash_str)
                 if _hamming_distance(title_hash, existing_hash) < 3:
@@ -516,30 +595,43 @@ async def _crawl_one_attempt(task_id: str, url: str, *, target_date: date, date_
 
     article_id: str | None = None
     async with AsyncSessionLocal() as session:
-        article = Article(
-            task_id=task_id,
-            original_title=draft.original_title[:512],
-            source_unit=(draft.source_unit or None),
-            original_link=page.final_url or url,
-            publish_date=draft.publish_date,
-            raw_content=draft.raw_content,
-            status="raw",
+        # original_link 存入时已去除 tracking 参数，提高 http/https 变体间的去重率
+        original_link = _normalize_url(page.final_url or url)
+
+        # 先查后插：消除绝大多数因并发的 IntegrityError
+        existing = await session.execute(
+            select(Article).where(Article.original_link == original_link)
         )
-        session.add(article)
-        try:
-            await session.commit()
-            await session.refresh(article)
-            article_id = article.id
-        except IntegrityError:
-            await session.rollback()
-            existing = await session.execute(
-                select(Article).where(Article.original_link == (page.final_url or url))
+        row = existing.scalar_one_or_none()
+        if row:
+            article_id = row.id
+        else:
+            article = Article(
+                task_id=task_id,
+                original_title=draft.original_title[:512],
+                source_unit=(draft.source_unit or None),
+                original_link=original_link,
+                publish_date=draft.publish_date or target_date,
+                raw_content=draft.raw_content,
+                status="raw",
             )
-            row = existing.scalar_one_or_none()
-            if row:
-                article_id = row.id
-            else:
-                return {"ok": False, "code": 5001, "reason": "DB 唯一约束冲突且无法定位文章", "stage": "validate"}
+            session.add(article)
+            try:
+                await session.commit()
+                await session.refresh(article)
+                article_id = article.id
+            except IntegrityError as exc:
+                await session.rollback()
+                # 竞态：查和插之间另一协程插入了同 original_link 的记录
+                existing = await session.execute(
+                    select(Article).where(Article.original_link == original_link)
+                )
+                row = existing.scalar_one_or_none()
+                if row:
+                    article_id = row.id
+                else:
+                    logger.warning("IntegrityError but article not found: original_link=%s url=%s detail=%s", original_link, url, exc.orig)
+                    return {"ok": False, "code": 5001, "reason": "DB 唯一约束冲突且无法定位文章", "stage": "validate"}
 
     # 写入 Redis 指纹（异步后台任务，不阻塞主流程）
     if article_id:

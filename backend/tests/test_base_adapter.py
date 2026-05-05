@@ -35,7 +35,7 @@ class TestSpiderAdapterValidate:
         adapter = _create_adapter()
         draft = ArticleDraft(
             original_title="Valid Title",
-            raw_content="x" * 100,
+            raw_content="x" * 200,
         )
         assert adapter.validate(draft) is True
 
@@ -80,11 +80,12 @@ class TestSpiderAdapterValidate:
         )
         assert adapter.validate(draft) is False
 
-    def test_content_exactly_100_chars_returns_true(self):
+    def test_content_exactly_200_chars_returns_true(self):
+        """Content with exactly 200 chars should pass validation."""
         adapter = _create_adapter()
         draft = ArticleDraft(
             original_title="Valid Title",
-            raw_content="x" * 100,
+            raw_content="x" * 200,
         )
         assert adapter.validate(draft) is True
 

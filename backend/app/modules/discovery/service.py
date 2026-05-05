@@ -43,7 +43,7 @@ async def discover_articles(
         seen.add(url)
 
         try:
-            rendered = await renderer.render(url)
+            rendered = await renderer.render(url, scroll_rounds_range=(2, 3))
         except Exception as e:
             logger.warning("render failed for discovery: %s - %r", url, e)
             continue
@@ -88,7 +88,7 @@ async def discover_articles(
                     break
                 paginated_urls.add(next_url)
                 try:
-                    rendered = await renderer.render(next_url)
+                    rendered = await renderer.render(next_url, scroll_rounds_range=(2, 3))
                 except Exception as e:
                     logger.warning("pagination render failed: %s - %r", next_url, e)
                     break
