@@ -47,3 +47,9 @@ desktop.ini
 # Logs
 *.log
 logs/
+
+# Temp / test output
+backend/output_test.html
+backend/output_test.md
+login-arc.png
+新建文件夹/
