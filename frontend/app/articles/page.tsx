@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { serverFetch } from '@/lib/server-fetch';
 import { ArticleListClient } from '@/components/articles/BatchDeleteBar';
+import { DateField } from '@/components/ui/DateField';
 
 type Category = { label: string; confidence: number };
 type ArticleItem = {
@@ -74,12 +75,8 @@ export default async function ArticlesPage({
       {/* Filters */}
       <form method="GET" className="card mb-8 p-4">
         <div className="flex flex-wrap items-end gap-4">
-          <Field label="起始日期">
-            <input name="date_from" type="date" defaultValue={searchParams.date_from} className="input w-36" />
-          </Field>
-          <Field label="结束日期">
-            <input name="date_to" type="date" defaultValue={searchParams.date_to} className="input w-36" />
-          </Field>
+          <DateField label="起始日期" name="date_from" defaultValue={searchParams.date_from} />
+          <DateField label="结束日期" name="date_to" defaultValue={searchParams.date_to} />
           <Field label="分类">
             <select name="category" defaultValue={searchParams.category || ''} className="input w-32">
               <option value="">全部</option>

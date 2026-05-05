@@ -5,6 +5,7 @@ import { CategoryEditor } from '@/components/articles/CategoryEditor';
 import { ReanalyzeButton } from '@/components/articles/ReanalyzeButton';
 import { DeleteArticleButton } from '@/components/articles/DeleteArticleButton';
 import { EmailSendButton } from '@/components/articles/EmailSendButton';
+import { ExportDocButton } from '@/components/articles/ExportDocButton';
 import { serverFetch, ServerApiError } from '@/lib/server-fetch';
 import { formatDate } from '@/lib/utils';
 
@@ -106,6 +107,7 @@ export default async function ArticleDetailPage({ params }: { params: { id: stri
           <a href={article.original_link} target="_blank" rel="noreferrer" className="transition-colors" style={{ color: '#3b82f6' }}>
             查看原文 ↗
           </a>
+          <ExportDocButton articleId={article.id} />
           <EmailSendButton articleId={article.id} />
           <Link href={`/articles/${article.id}/wechat`} className="btn-primary">
             微信推文 →

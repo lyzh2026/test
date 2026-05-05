@@ -2,16 +2,23 @@ from datetime import date, datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, model_validator
 
 
 class CrawlerTaskCreate(BaseModel):
     task_name: str | None = None
     target_date: date
     date_to: date | None = None
-    url_list: list[str] = Field(min_length=1, max_length=100)
+    url_list: list[str] = Field(default=[], max_length=100)
+    direct_urls: list[str] = Field(default=[], max_length=100)
     callback_url: HttpUrl | None = None
     priority: int = 1
+
+    @model_validator(mode="after")
+    def _require_at_least_one_url(self):
+        if not self.url_list and not self.direct_urls:
+            raise ValueError("url_list 和 direct_urls 至少需要提供一个")
+        return self
 
 
 class CrawlerTaskResponse(BaseModel):

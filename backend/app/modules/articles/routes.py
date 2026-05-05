@@ -1,8 +1,12 @@
 """文章查询 + 统计 + 分类编辑接口（PRD 3.2.3）。"""
+import io
 import logging
+import re
 from datetime import date, timedelta
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -107,6 +111,90 @@ async def get_article(
     data = _serialize_article(article, analysis)
     data["raw_content"] = article.raw_content
     return success(data, request=request)
+
+
+@router.get("/articles/{article_id}/export/doc")
+async def export_article_doc(
+    article_id: str,
+    _: object = Depends(current_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """导出单篇文章为 .docx 文件。"""
+    from docx import Document
+    from docx.shared import Pt, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    res = await session.execute(
+        select(Article, AIAnalysis)
+        .join(AIAnalysis, AIAnalysis.article_id == Article.id, isouter=True)
+        .where(Article.id == article_id)
+    )
+    row = res.one_or_none()
+    if not row:
+        return error(2003, "文章不存在", http_status=404, request=Request(scope={"type": "http"}))
+
+    article, analysis = row
+
+    doc = Document()
+
+    # 标题
+    title_para = doc.add_heading(article.original_title or "无标题", level=1)
+    title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    # 元信息
+    meta_parts = []
+    if article.publish_date:
+        meta_parts.append(f"发布日期：{article.publish_date.isoformat()}")
+    if article.source_unit:
+        meta_parts.append(f"来源：{article.source_unit}")
+    if article.original_link:
+        meta_parts.append(f"原文链接：{article.original_link}")
+    if meta_parts:
+        meta_para = doc.add_paragraph()
+        meta_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = meta_para.add_run(" | ".join(meta_parts))
+        run.font.size = Pt(9)
+        run.font.color.rgb = RGBColor(0x9C, 0xA3, 0xAF)
+
+    doc.add_paragraph("")  # 空行
+
+    # AI 摘要
+    if analysis and analysis.summary:
+        doc.add_heading("AI 摘要", level=2)
+        doc.add_paragraph(analysis.summary)
+        if analysis.keywords:
+            doc.add_paragraph("关键词：" + "、".join(analysis.keywords))
+
+    # AI 分类
+    if analysis and analysis.categories:
+        cats = "、".join(c.get("label", "") for c in analysis.categories)
+        doc.add_paragraph(f"分类：{cats}")
+
+    doc.add_paragraph("")  # 空行
+
+    # 正文
+    if article.raw_content:
+        doc.add_heading("正文", level=2)
+        for para_text in article.raw_content.split("\n"):
+            stripped = para_text.strip()
+            if stripped:
+                doc.add_paragraph(stripped)
+
+    # 写入内存
+    buf = io.BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+
+    # 文件名：去掉特殊字符
+    safe_title = re.sub(r'[\\/:*?"<>|]', '_', (article.original_title or "article")[:60])
+    filename = f"{safe_title}.docx"
+    encoded_filename = quote(filename, safe="")
+
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"},
+    )
 
 
 @router.patch("/articles/{article_id}/bookmark")

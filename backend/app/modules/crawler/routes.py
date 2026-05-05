@@ -43,6 +43,7 @@ async def create_task(
         task = await service.submit_task(
             session=session,
             url_list=payload.url_list,
+            direct_urls=payload.direct_urls,
             target_date=payload.target_date,
             date_to=payload.date_to,
             task_name=payload.task_name,

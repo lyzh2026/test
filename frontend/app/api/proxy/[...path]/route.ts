@@ -22,7 +22,7 @@ const HOP_BY_HOP = new Set([
   'content-length',
 ]);
 
-async function fetchWithHttp(target: string, init: { method: string; headers: Record<string, string>; body?: string }): Promise<{ status: number; statusText: string; headers: Record<string, string | string[]>; body: string }> {
+async function fetchWithHttp(target: string, init: { method: string; headers: Record<string, string>; body?: string }): Promise<{ status: number; statusText: string; headers: Record<string, string | string[]>; body: Buffer }> {
   return new Promise((resolve, reject) => {
     const u = new URL(target);
     const mod = u.protocol === 'https:' ? https : http;
@@ -44,7 +44,7 @@ async function fetchWithHttp(target: string, init: { method: string; headers: Re
             status: res.statusCode || 502,
             statusText: res.statusMessage || '',
             headers: res.headers as Record<string, string | string[]>,
-            body: Buffer.concat(chunks).toString('utf-8'),
+            body: Buffer.concat(chunks),
           });
         });
       },

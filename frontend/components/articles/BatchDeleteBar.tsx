@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api, ApiError } from '@/lib/api';
 import { EmailSendButton } from '@/components/articles/EmailSendButton';
+import { ExportDocButton, batchExportDoc } from '@/components/articles/ExportDocButton';
 
 type ArticleItem = {
   id: string;
@@ -105,6 +106,13 @@ export function ArticleListClient({ items, total, limit, offset, prevHref, nextH
           >
             批量删除
           </button>
+          <button
+            onClick={() => batchExportDoc(Array.from(selected))}
+            disabled={selected.size === 0}
+            className="btn-secondary disabled:opacity-30"
+          >
+            批量导出
+          </button>
         </div>
       </div>
 
@@ -142,6 +150,7 @@ export function ArticleListClient({ items, total, limit, offset, prevHref, nextH
               >
                 {a.bookmarked ? '★' : '☆'}
               </button>
+              <ExportDocButton articleId={a.id} compact />
               <EmailSendButton articleId={a.id} compact />
               <button
                 onClick={() => deleteSingle(a.id)}

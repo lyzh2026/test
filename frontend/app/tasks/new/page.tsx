@@ -18,7 +18,8 @@ export default function NewTaskPage() {
   const [taskName, setTaskName] = useState('');
   const [dateFrom, setDateFrom] = useState(todayISO());
   const [dateTo, setDateTo] = useState(todayISO());
-  const [urlText, setUrlText] = useState('');
+  const [directUrlText, setDirectUrlText] = useState('');
+  const [entryUrlText, setEntryUrlText] = useState('');
   const [priority, setPriority] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -34,9 +35,9 @@ export default function NewTaskPage() {
     setLinks([]);
     setSelected(new Set());
     setPreviewDone(false);
-    const entryUrl = urlText.split(/\s+/).map((s) => s.trim()).filter(Boolean)[0];
+    const entryUrl = entryUrlText.split(/\s+/).map((s) => s.trim()).filter(Boolean)[0];
     if (!entryUrl) {
-      setError('请输入入口 URL');
+      setError('请输入入口页 URL');
       return;
     }
     setScanning(true);
@@ -65,11 +66,13 @@ export default function NewTaskPage() {
     if (usePreviewUrls && previewDone && selected.size > 0) {
       url_list = Array.from(selected);
     } else {
-      url_list = urlText.split(/\s+/).map((s) => s.trim()).filter(Boolean);
+      url_list = entryUrlText.split(/\s+/).map((s) => s.trim()).filter(Boolean);
     }
 
-    if (url_list.length === 0) {
-      setError('请至少选择一个链接');
+    const direct_urls = directUrlText.split(/\s+/).map((s) => s.trim()).filter(Boolean);
+
+    if (url_list.length === 0 && direct_urls.length === 0) {
+      setError('请至少输入一个 URL（精确文章 URL 或入口页 URL）');
       return;
     }
 
@@ -77,6 +80,7 @@ export default function NewTaskPage() {
     try {
       const data = await api.post<CreateResp>('/api/v1/crawler/task', {
         url_list,
+        direct_urls,
         target_date: dateFrom,
         date_to: dateTo !== dateFrom ? dateTo : null,
         task_name: taskName || null,
@@ -161,18 +165,33 @@ export default function NewTaskPage() {
 
         <div>
           <label className="mb-1.5 block text-sm" style={{ color: '#6b7280' }}>
-            入口 URL（每行一个，系统将自动扫描站点发现文章）
+            精确文章 URL（每行一个，跳过发现直接爬取）
           </label>
           <textarea
-            className="input h-36 resize-y font-mono text-xs"
+            className="input h-28 resize-y font-mono text-xs"
             style={{ background: '#f9fafb' }}
-            value={urlText}
-            onChange={(e) => setUrlText(e.target.value)}
-            placeholder="https://www.tsinghua.edu.cn/"
-            required
+            value={directUrlText}
+            onChange={(e) => setDirectUrlText(e.target.value)}
+            placeholder="https://example.com/news/2026/05/article-123.html"
           />
           <p className="mt-1.5 text-xs" style={{ color: '#9ca3af' }}>
-            提交后系统自动从入口 URL 发现该域名下的文章链接，爬取后按目标日期过滤入库。
+            已知的文章直链，系统将直接爬取内容，不做站点发现。
+          </p>
+        </div>
+
+        <div>
+          <label className="mb-1.5 block text-sm" style={{ color: '#6b7280' }}>
+            入口页 URL（每行一个，系统将扫描站点发现文章）
+          </label>
+          <textarea
+            className="input h-28 resize-y font-mono text-xs"
+            style={{ background: '#f9fafb' }}
+            value={entryUrlText}
+            onChange={(e) => setEntryUrlText(e.target.value)}
+            placeholder="https://www.tsinghua.edu.cn/"
+          />
+          <p className="mt-1.5 text-xs" style={{ color: '#9ca3af' }}>
+            列表页或首页，系统自动从入口发现该域名下的文章链接，再爬取入库。
           </p>
         </div>
 
@@ -183,11 +202,11 @@ export default function NewTaskPage() {
         <div className="flex gap-3">
           <button
             type="button"
-            disabled={scanning}
+            disabled={scanning || !entryUrlText.trim()}
             onClick={onPreview}
             className="btn-primary disabled:opacity-50"
           >
-            {scanning ? '扫描中…' : '预览发现链接'}
+            {scanning ? '扫描中…' : '预览入口页发现链接'}
           </button>
           <button
             type="button"
@@ -195,7 +214,7 @@ export default function NewTaskPage() {
             onClick={(e) => onSubmit(e, false)}
             className="btn-primary disabled:opacity-50"
           >
-            {loading ? '提交中…' : '直接提交任务'}
+            {loading ? '提交中…' : '提交任务'}
           </button>
           <button type="button" onClick={() => router.push('/tasks')} className="btn-secondary">
             取消

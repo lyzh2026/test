@@ -102,28 +102,37 @@ async def submit_task(
     *,
     session: AsyncSession,
     url_list: list[str],
+    direct_urls: list[str] | None = None,
     target_date: date,
     date_to: date | None = None,
     task_name: str | None,
     callback_url: str | None,
     priority: int,
 ) -> CrawlerTask:
-    """前端提交：URL 校验 → 创建 task（立即可见）→ 后台 discovery + crawl。"""
-    if len(url_list) > settings.CRAWLER_MAX_URLS_PER_TASK:
-        raise URLValidationError(1001, f"单任务入口 URL 数量不能超过 {settings.CRAWLER_MAX_URLS_PER_TASK}")
+    """前端提交：URL 校验 → 创建 task（立即可见）→ 后台 discovery + crawl。
+
+    direct_urls: 精确文章 URL，跳过发现直接爬取。
+    url_list: 入口页 URL，先发现再爬取。
+    """
+    direct_urls = direct_urls or []
+    if len(url_list) + len(direct_urls) > settings.CRAWLER_MAX_URLS_PER_TASK:
+        raise URLValidationError(1001, f"单任务 URL 总数不能超过 {settings.CRAWLER_MAX_URLS_PER_TASK}")
 
     rules = await _load_rules(session)
     entry_urls: list[str] = []
+    valid_direct_urls: list[str] = []
     failed_details: list[dict] = []
-    for raw in url_list:
+
+    async def _validate_url(raw: str, dest: list[str], seen: set[str]):
+        nonlocal rules
         u = (raw or "").strip()
-        if not u or u in entry_urls:
-            continue
+        if not u or u in seen:
+            return
+        seen.add(u)
         try:
             await validate_url(u, rules)
-            entry_urls.append(u)
+            dest.append(u)
         except URLValidationError as e:
-            # 白名单未命中 → 自动加白后重试
             if e.code == 1004:
                 hostname = urlparse(u).hostname
                 if hostname:
@@ -139,18 +148,25 @@ async def submit_task(
                     rules = await _load_rules(session)
                     try:
                         await validate_url(u, rules)
-                        entry_urls.append(u)
-                        continue
+                        dest.append(u)
+                        return
                     except URLValidationError:
                         pass
             failed_details.append({"url": u, "code": e.code, "reason": e.message, "stage": "validate"})
 
-    # 先创建任务（仅 entry URLs），POST 立即返回，前端立即可见
+    seen: set[str] = set()
+    for raw in url_list:
+        await _validate_url(raw, entry_urls, seen)
+    for raw in direct_urls:
+        await _validate_url(raw, valid_direct_urls, seen)
+
+    # 先创建任务，POST 立即返回，前端立即可见
+    all_urls = list(entry_urls) + list(valid_direct_urls)
     task = CrawlerTask(
         task_name=task_name,
         target_date=target_date,
         date_to=date_to,
-        url_list=list(entry_urls),
+        url_list=all_urls,
         total_urls=0,
         completed_urls=0,
         failed_urls=len(failed_details),
@@ -167,7 +183,16 @@ async def submit_task(
         scheduler.add_job(
             _run_discovery_and_crawl,
             id=f"discover:{task.id}",
-            args=[task.id, entry_urls, target_date, date_to],
+            args=[task.id, entry_urls, valid_direct_urls, target_date, date_to],
+            trigger=DateTrigger(),
+            replace_existing=True,
+        )
+    elif valid_direct_urls:
+        # 只有精确 URL，跳过发现直接爬取
+        scheduler.add_job(
+            run_crawl_job,
+            id=f"crawl:{task.id}",
+            args=[task.id, valid_direct_urls],
             trigger=DateTrigger(),
             replace_existing=True,
         )
@@ -182,11 +207,12 @@ async def submit_task(
 async def _run_discovery_and_crawl(
     task_id: str,
     entry_urls: list[str],
+    direct_urls: list[str],
     target_date: date,
     date_to: date | None,
 ):
-    """后台：域名发现 → URL 校验 → 更新 task → 启动 crawl。"""
-    logger.info("discovery start: task=%s entries=%s", task_id, len(entry_urls))
+    """后台：域名发现 → URL 校验 → 合并精确 URL → 更新 task → 启动 crawl。"""
+    logger.info("discovery start: task=%s entries=%s direct=%s", task_id, len(entry_urls), len(direct_urls))
 
     async with AsyncSessionLocal() as session:
         rules = await _load_rules(session)
@@ -219,6 +245,10 @@ async def _run_discovery_and_crawl(
     # 入口 URL 本身也可能是文章，一并加入
     for entry in entry_urls:
         discovered.add(entry)
+
+    # 精确 URL 直接加入（跳过发现）
+    for url in direct_urls:
+        discovered.add(url)
 
     # 校验所有发现到的链接
     valid_urls: list[str] = []
@@ -509,6 +539,9 @@ async def _crawl_one_attempt(task_id: str, url: str, *, target_date: date, date_
     if not draft:
         return {"ok": True, "filtered": True, "code": 2002, "reason": last_reason, "stage": "extract"}
 
+    # 清洗新闻噪音（图片署名、标题块等）
+    draft.raw_content = _clean_news_noise(draft.raw_content)
+
     # 日期过滤：页面有明确日期且在时间段外时跳过
     date_to_val = date_to or target_date
     if draft.publish_date and not (target_date <= draft.publish_date <= date_to_val):
@@ -747,6 +780,48 @@ async def list_tasks(session: AsyncSession, *, limit: int = 50, offset: int = 0)
 
 async def get_task(session: AsyncSession, task_id: str) -> CrawlerTask | None:
     return await session.get(CrawlerTask, task_id)
+
+
+# === 新闻噪音清洗 ===
+
+# 图片署名：新华社记者 XX 摄 / 图/XX / 摄影：XX / XX供图 / 新华社照片
+_PHOTO_CREDIT_RE = re.compile(
+    r'^(?:'
+    r'(?:新华社|中新社|人民日报|央视|光明日报|经济日报)?'
+    r'(?:记者\s*)?.{1,6}\s*(?:摄|摄影|拍摄|供图|图|照片)'
+    r'|图[/／].{1,10}'
+    r'|摄影[：:].{1,10}'
+    r'|(?:图片|影像)[：:].{1,10}'
+    r'|编辑[：:].{1,10}'
+    r'|来源[：:].{1,20}'
+    r')\s*$',
+    re.MULTILINE,
+)
+
+# 标题块：连续 2-5 行短文本（每行不超 30 字），紧跟在标题后、正文前
+_HEADLINE_BLOCK_RE = re.compile(
+    r'(?:^.{2,30}[^\n。！？\n]\n){2,5}(?=[^\n])',
+    re.MULTILINE,
+)
+
+# Markdown 粗体标记（支持跨行）
+_MD_BOLD_RE = re.compile(r'\*{1,2}(.+?)\*{1,2}', re.DOTALL)
+
+# 连续空行压缩
+_MULTI_BLANK_RE = re.compile(r'\n{3,}')
+
+
+def _clean_news_noise(text: str) -> str:
+    """清洗新闻正文中的常见噪音：图片署名、标题块、markdown 标记等。"""
+    if not text:
+        return text
+    # 去除 markdown 粗体标记
+    text = _MD_BOLD_RE.sub(r'\1', text)
+    # 去除图片署名行
+    text = _PHOTO_CREDIT_RE.sub('', text)
+    # 压缩连续空行
+    text = _MULTI_BLANK_RE.sub('\n\n', text)
+    return text.strip()
 
 
 # === 去重工具函数 ===
