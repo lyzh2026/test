@@ -1,0 +1,1020 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>拾讯系统 - 整合版</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&display=swap');
+        body { font-family: 'Noto Sans SC', sans-serif; background: #fcfcfc; color: #333; height: 100vh; overflow: hidden; }
+
+        /* 侧边栏 */
+        .sidebar { width: 72px; background: white; border-right: 1px solid #f0f0f0; height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 24px 0; flex-shrink: 0; z-index: 50; }
+        .nav-item {
+            width: 48px; height: 48px; display: flex; align-items: center; justify-content: center;
+            border-radius: 12px; margin-bottom: 12px; cursor: pointer; color: #8E9AAF; transition: all 0.2s;
+        }
+        .nav-item:hover { background: #f8fafc; color: #333; }
+        .nav-active { background: #EEF2FF; color: #3B82F6 !important; }
+
+        .view-section { display: none; height: 100vh; width: 100%; overflow: hidden; }
+        .view-section.active { display: flex; flex-direction: column; }
+        #view-database.active { flex-direction: row; }
+
+        /* AI分类页 - shixun2风格三栏布局 */
+        .category-sidebar { width: 200px; border-right: 1px solid #f3f4f6; padding: 24px 16px; background: white; flex-shrink: 0; }
+        .article-list { width: 320px; border-right: 1px solid #f3f4f6; background: white; overflow-y: auto; flex-shrink: 0; }
+        .article-content { flex: 1; background: white; overflow-y: auto; position: relative; }
+
+        .card-shadow { box-shadow: 0 4px 20px rgba(0,0,0,0.03); }
+        .custom-scroll::-webkit-scrollbar { width: 4px; }
+        .custom-scroll::-webkit-scrollbar-thumb { background: #E5E7EB; border-radius: 10px; }
+
+        .tag-pill { background: #f8fafc; border: 1px solid #e2e8f0; color: #64748b; padding: 4px 12px; border-radius: 6px; font-size: 12px; }
+        .tag-pill-active { background: #eff6ff; color: #3b82f6; border-color: #dbeafe; }
+
+        /* 设置页 - shixun5风格 */
+        .status-dark-card { background: #18181b; border-radius: 24px; color: white; padding: 32px; }
+        .config-card { background: white; border: 1px solid #f1f5f9; border-radius: 24px; padding: 24px; }
+
+        /* 采集页 - shixun4 版本 */
+        .collect-container { transform: translateY(-8vh); }
+
+        /* 实时日志浮窗 */
+        .log-panel {
+            background: #0f172a;
+            border-radius: 16px;
+            padding: 16px;
+            margin-top: 24px;
+            max-height: 180px;
+            overflow-y: auto;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 11px;
+            line-height: 1.7;
+            color: #4ade80;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+        }
+        .log-header {
+            color: #94a3b8;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 8px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #1e293b;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .log-done { color: #fbbf24; font-weight: bold; }
+
+        /* 弹出面板基础 */
+        .popover-panel {
+            position: absolute;
+            background: white;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.08);
+            z-index: 100;
+            padding: 12px;
+        }
+    </style>
+</head>
+<body class="flex">
+
+    <!-- 侧边栏 -->
+    <aside class="sidebar">
+        <div class="w-10 h-10 bg-black rounded-xl flex items-center justify-center mb-10 text-white font-bold text-lg">拾</div>
+        <nav class="flex flex-col items-center flex-1">
+            <!-- 1. 采集岛 -->
+            <div onclick="switchTab('collect', this)" class="nav-item nav-active" title="采集岛">
+                <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            </div>
+            <!-- 2. AI分类 -->
+            <div onclick="switchTab('database', this)" class="nav-item" title="AI分类">
+                <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="1"></rect><path d="M4 8h16M4 12h16M4 16h16"></path></svg>
+            </div>
+            <!-- 3. 分发导出 -->
+            <div onclick="switchTab('distribute', this)" class="nav-item" title="分发导出">
+                <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M7 7l5 5-5 5M13 7l5 5-5 5"></path><path d="M4 12h12" opacity="0.3"></path></svg>
+            </div>
+            <!-- 4. 运行大盘 -->
+            <div onclick="switchTab('dashboard', this)" class="nav-item" title="运行大盘">
+                <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><path d="M3 9h18M9 21V9"></path></svg>
+            </div>
+        </nav>
+        <!-- 5. 设置 -->
+        <div onclick="switchTab('settings', this)" class="nav-item" title="设置">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        </div>
+    </aside>
+
+    <!-- 内容主区 -->
+    <main class="flex-1 relative bg-[#F9FAFB] overflow-hidden">
+
+        <!-- 1. 智能采集岛 (shixun4版本) -->
+        <section id="view-collect" class="view-section active flex-col items-center justify-center">
+            <div class="w-full max-w-3xl text-center collect-container">
+                <h1 class="text-4xl font-bold mb-4 tracking-tight">智能采集岛</h1>
+                <p class="text-gray-400 mb-12 text-lg">输入网址列表，AI 将自动抓取、摘要并归类至对应垂直领域。</p>
+
+                <div class="bg-white border border-gray-100 rounded-[32px] p-10 shadow-2xl shadow-blue-100/50 text-left">
+                    <div class="flex gap-4 mb-8">
+                        <input type="text" id="urlInput" class="flex-1 bg-gray-50 rounded-2xl px-6 py-4 outline-none text-sm placeholder:text-gray-300" placeholder="输入目标 URL 链接...">
+                        <div class="w-56 bg-gray-50 rounded-2xl px-4 flex items-center gap-2">
+                            <span class="text-gray-300 text-sm">🏷️</span>
+                            <input type="text" id="tagInput" class="bg-transparent text-sm outline-none w-full placeholder:text-gray-300" placeholder="自定义业务标签">
+                        </div>
+                    </div>
+
+                    <button class="text-blue-600 text-sm font-bold flex items-center gap-2 mb-12 hover:opacity-70 transition">
+                        <span class="text-lg">+</span> 添加更多链接
+                    </button>
+
+                    <div class="flex items-center justify-between pt-8 border-t border-gray-50">
+                        <div class="flex items-center gap-4 text-sm text-gray-500">
+                            <div class="relative inline-block">
+                                <div class="flex items-center gap-2">
+                                    <select id="dateRange" onchange="handleDateChange(this)" class="bg-gray-50 px-4 py-2 rounded-xl outline-none border-none cursor-pointer">
+                                        <option>过去 24 小时</option>
+                                        <option>过去 7 天</option>
+                                        <option>自定义日期...</option>
+                                    </select>
+                                    <button onclick="openDatePicker()" class="p-2 hover:bg-gray-100 rounded-lg transition" title="选择日期范围">
+                                        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                                    </button>
+                                </div>
+                                <div id="datePickerPanel" class="popover-panel hidden absolute top-full left-0 mt-2 w-56">
+                                    <div class="text-xs text-gray-400 mb-3 font-bold">选择日期范围</div>
+                                    <div class="space-y-2">
+                                        <div>
+                                            <label class="text-[10px] text-gray-400 block mb-1">起始日期</label>
+                                            <input type="date" id="startDate" class="w-full bg-gray-50 rounded-lg px-2 py-1.5 text-xs outline-none border border-gray-100" onchange="handleRangeChange()">
+                                        </div>
+                                        <div>
+                                            <label class="text-[10px] text-gray-400 block mb-1">终止日期</label>
+                                            <input type="date" id="endDate" class="w-full bg-gray-50 rounded-lg px-2 py-1.5 text-xs outline-none border border-gray-100" onchange="handleRangeChange()">
+                                        </div>
+                                    </div>
+                                    <button onclick="confirmDateRange()" class="mt-3 w-full py-2 bg-zinc-900 text-white rounded-lg text-xs font-bold hover:bg-black transition">确定</button>
+                                </div>
+                            </div>
+                            <label class="flex items-center gap-2 cursor-pointer">
+                                <input type="checkbox" checked class="w-4 h-4 accent-blue-600 rounded">
+                                开启 AI 深度摘要
+                            </label>
+                        </div>
+                        <button onclick="startCrawl()" class="bg-zinc-900 text-white px-10 py-4 rounded-2xl font-bold text-sm shadow-xl hover:bg-black transition-all">开始结构化爬取</button>
+                    </div>
+
+                    <!-- 实时日志浮窗 -->
+                    <div id="logPanel" class="hidden log-panel custom-scroll">
+                        <div class="log-header">
+                            <span class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+                            <span>AI 实时采集日志</span>
+                        </div>
+                        <div id="logContent" class="space-y-0.5"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 2. AI分类 (database风格) -->
+        <section id="view-database" class="view-section overflow-y-auto bg-[#F9FAFB]">
+            <div class="p-6 max-w-[1600px] mx-auto">
+                <!-- 搜索筛选栏 -->
+                <div class="bg-white p-4 rounded-lg shadow-sm mb-4">
+                    <div class="flex flex-wrap items-center gap-6">
+                        <div class="flex items-center gap-2">
+                            <span class="text-sm font-medium text-gray-500 whitespace-nowrap">关键词：</span>
+                            <div class="relative">
+                                <input type="text" id="dbSearchInput" oninput="handleDbSearch()" placeholder="搜索标题/摘要" class="pl-3 pr-8 py-1.5 border border-gray-300 rounded text-sm w-64 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                                <span class="absolute right-2 top-2 text-gray-400">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                                </span>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span class="text-sm font-medium text-gray-500 whitespace-nowrap">分类：</span>
+                            <select id="dbCategoryFilter" onchange="handleDbSearch()" class="border border-gray-300 rounded px-3 py-1.5 text-sm w-40 focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white">
+                                <option>全部</option>
+                                <option>最新政策</option>
+                                <option>数字经济</option>
+                                <option>人工智能</option>
+                                <option>数据要素</option>
+                                <option>通信</option>
+                                <option>申报</option>
+                                <option>潜在商机</option>
+                                <option>具身智能</option>
+                                <option>车路云协同</option>
+                                <option>新型工业化</option>
+                                <option>算力</option>
+                            </select>
+                        </div>
+                        <div class="flex items-center gap-2 flex-grow max-w-lg">
+                            <span class="text-sm font-medium text-gray-500 whitespace-nowrap">日期：</span>
+                            <div class="flex items-center gap-2 w-full">
+                                <div class="relative w-full">
+                                    <input type="date" id="dbStartDate" onchange="handleDbSearch()" class="w-full pl-3 pr-8 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+                                </div>
+                                <span class="text-gray-400">→</span>
+                                <div class="relative w-full">
+                                    <input type="date" id="dbEndDate" onchange="handleDbSearch()" class="w-full pl-3 pr-8 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+                                </div>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-3 ml-auto">
+                            <button onclick="handleDbSearch()" class="bg-blue-600 hover:bg-blue-700 text-white px-8 py-1.5 rounded text-sm font-medium transition-colors shadow-sm">搜索</button>
+                            <button onclick="resetDbFilters()" class="border border-gray-300 bg-white hover:bg-gray-50 text-gray-600 px-8 py-1.5 rounded text-sm transition-colors">重置</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 批量操作栏 -->
+                <div class="bg-white p-4 border-b border-gray-100 rounded-t-lg flex items-center justify-between shadow-sm">
+                    <div class="flex items-center gap-4">
+                        <label class="flex items-center gap-2 cursor-pointer text-sm text-gray-600">
+                            <input type="checkbox" id="selectAll" onchange="toggleSelectAll()" class="w-4 h-4 rounded border-gray-300 text-blue-600">
+                            全选
+                        </label>
+                        <button onclick="batchDelete()" class="flex items-center gap-1.5 px-3 py-1.5 text-sm text-red-500 border border-red-100 hover:bg-red-50 rounded bg-white transition-all">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
+                            批量删除
+                        </button>
+                        <button onclick="exportWord()" class="flex items-center gap-1.5 px-3 py-1.5 text-sm text-blue-600 border border-blue-100 hover:bg-blue-50 rounded bg-white transition-all">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="16" x2="8" y1="13" y2="13"/><line x1="16" x2="8" y1="17" y2="17"/><line x1="10" x2="8" y1="9" y2="9"/></svg>
+                            导出精品 Word
+                        </button>
+                    </div>
+                    <div class="text-sm text-gray-500">
+                        已选择 <span class="text-blue-600 font-bold" id="selectedCount">0</span> 篇
+                    </div>
+                </div>
+
+                <!-- 表格区域 -->
+                <div class="bg-white rounded-b-lg shadow-sm overflow-x-auto">
+                    <table class="w-full text-left border-collapse min-w-[1000px]">
+                        <thead>
+                            <tr class="bg-gray-50 border-y border-gray-100 text-gray-500 text-sm font-medium">
+                                <th class="py-4 px-6 w-12 text-center"></th>
+                                <th class="py-4 px-4 w-[40%]">标题</th>
+                                <th class="py-4 px-4">发布单位</th>
+                                <th class="py-4 px-4">发布日期</th>
+                                <th class="py-4 px-4">分类</th>
+                                <th class="py-4 px-4">来源</th>
+                                <th class="py-4 px-4 text-center">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="dbTableBody" class="text-sm text-gray-600">
+                            <!-- 动态渲染 -->
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- 分页 -->
+                <div class="mt-6 flex justify-end pb-10">
+                    <nav class="flex items-center gap-1" id="dbPagination">
+                        <!-- 动态渲染 -->
+                    </nav>
+                </div>
+            </div>
+        </section>
+
+        <!-- 3. 分发与导出 (shixun2版本) -->
+        <section id="view-distribute" class="view-section flex-col p-16">
+             <h1 class="text-3xl font-bold mb-2">分发与导出</h1>
+             <p class="text-gray-400 mb-16">将处理好的信息资产通过标准化渠道一键推送或生成专业报告。</p>
+             <div class="grid grid-cols-3 gap-8">
+                <div class="bg-white p-10 rounded-[32px] border border-gray-100 card-shadow flex flex-col items-center">
+                    <div class="w-16 h-16 bg-green-50 text-green-500 rounded-2xl flex items-center justify-center mb-8 text-2xl">📱</div>
+                    <h3 class="text-xl font-bold mb-4">一键微信推送</h3>
+                    <p class="text-xs text-gray-400 text-center leading-relaxed mb-10">支持将指定文章及 AI 摘要自动发布至关联微信公众号，系统将自动生成统一视觉风格的封面图片。</p>
+                    <button class="w-full py-4 rounded-2xl border border-gray-100 text-sm font-bold mt-auto">配置公众号与推送</button>
+                </div>
+                <div class="bg-white p-10 rounded-[32px] border border-gray-100 card-shadow flex flex-col items-center">
+                    <div class="w-16 h-16 bg-blue-50 text-blue-500 rounded-2xl flex items-center justify-center mb-8 text-2xl">📄</div>
+                    <h3 class="text-xl font-bold mb-4">专业 Word 导出</h3>
+                    <p class="text-xs text-gray-400 text-center leading-relaxed mb-10">输出带有固定单位 Logo、背景水印、自动生成目录和 AI 导读的格式化报告。</p>
+                    <div class="flex gap-2 mb-6">
+                        <span class="bg-gray-100 px-3 py-1 rounded text-[10px]">含水印</span>
+                        <span class="bg-gray-100 px-3 py-1 rounded text-[10px]">含自动目录</span>
+                    </div>
+                    <button class="w-full py-4 rounded-2xl border border-gray-100 text-sm font-bold mt-auto">选择文章并导出</button>
+                </div>
+                <div class="bg-white p-10 rounded-[32px] border border-gray-100 card-shadow flex flex-col items-center">
+                    <div class="w-16 h-16 bg-orange-50 text-orange-500 rounded-2xl flex items-center justify-center mb-8 text-2xl">✉️</div>
+                    <h3 class="text-xl font-bold mb-4">智能邮件订阅</h3>
+                    <p class="text-xs text-gray-400 text-center leading-relaxed mb-10">建立监听规则（链接+主题词+接收邮箱），系统监测到相关新文章后将第一时间自动邮件通知。</p>
+                    <button class="w-full py-4 rounded-2xl border border-gray-100 text-sm font-bold mt-auto">+ 新建订阅规则</button>
+                </div>
+             </div>
+        </section>
+
+        <!-- 4. 运行大盘 (shixun5版本) -->
+        <section id="view-dashboard" class="view-section p-12 overflow-y-auto">
+            <h1 class="text-2xl font-bold mb-8">运行大盘</h1>
+            <div class="grid grid-cols-3 gap-6 mb-8">
+                <div class="bg-white p-8 rounded-3xl border border-gray-100 shadow-sm">
+                    <div class="text-gray-400 text-xs mb-2">累计处理信息</div>
+                    <div class="text-3xl font-bold text-blue-600">124,592 <span class="text-xs text-green-500">+12%</span></div>
+                </div>
+                <div class="bg-white p-8 rounded-3xl border border-gray-100 shadow-sm">
+                    <div class="text-gray-400 text-xs mb-2">AI 摘要准确率</div>
+                    <div class="text-3xl font-bold text-zinc-800">98.2%</div>
+                </div>
+                <div class="bg-white p-8 rounded-3xl border border-gray-100 shadow-sm">
+                    <div class="text-gray-400 text-xs mb-2">平均研判耗时</div>
+                    <div class="text-3xl font-bold text-zinc-800">1.4s</div>
+                </div>
+            </div>
+            <div class="grid grid-cols-2 gap-8">
+                <div class="bg-white p-8 rounded-3xl border border-gray-100 h-80 flex flex-col">
+                    <h3 class="text-sm font-bold mb-4">领域分布</h3>
+                    <canvas id="pieChart"></canvas>
+                </div>
+                <div class="bg-white p-8 rounded-3xl border border-gray-100 h-80 flex flex-col">
+                    <h3 class="text-sm font-bold mb-4">采集趋势</h3>
+                    <canvas id="lineChart"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <!-- 5. 设置与日志 (shixun5版本) -->
+        <section id="view-settings" class="view-section p-12 overflow-y-auto">
+            <div class="max-w-6xl mx-auto">
+                <h1 class="text-3xl font-bold mb-10">系统设置与日志</h1>
+
+                <!-- 顶部双卡片 -->
+                <div class="grid grid-cols-5 gap-8 mb-12">
+                    <!-- 配置卡片 (左侧 3/5) -->
+                    <div class="col-span-3 config-card space-y-6">
+                        <div class="flex items-center gap-3 mb-4 text-gray-400 text-sm">
+                            <span>⚙️</span> AI 研判模型
+                        </div>
+                        <div class="flex items-center justify-between bg-gray-50 p-4 rounded-xl">
+                            <span class="text-sm">研判模型：<span class="font-bold ml-2">GPT-4o</span></span>
+                            <button class="text-blue-600 text-xs font-bold">切换</button>
+                        </div>
+                        <div class="flex items-center justify-between bg-gray-50 p-4 rounded-xl">
+                            <span class="text-sm">采集频率：<span class="font-bold ml-2">每 30 分钟</span></span>
+                            <button class="text-blue-600 text-xs font-bold">修改</button>
+                        </div>
+                    </div>
+
+                    <!-- 状态卡片 (右侧 2/5 黑色面板) -->
+                    <div class="col-span-2 status-dark-card flex flex-col justify-between">
+                        <div>
+                            <h3 class="text-lg font-bold mb-2">系统状态</h3>
+                            <p class="text-gray-400 text-xs leading-relaxed">自动化入库运行中。当前定向至公有库。所有数据已进行三级脱敏与加密处理。</p>
+                        </div>
+                        <button class="w-full bg-white text-black py-4 rounded-xl font-bold text-sm mt-8 hover:bg-gray-100 transition shadow-lg">立即执行同步</button>
+                    </div>
+                </div>
+
+                <!-- 底部日志列表 -->
+                <div class="bg-white border border-gray-100 rounded-[24px] overflow-hidden">
+                    <div class="p-8 pb-4 border-b border-gray-50 font-bold">结构化入库与系统日志</div>
+                    <table class="w-full text-left">
+                        <thead>
+                            <tr class="text-[11px] text-gray-400 uppercase tracking-widest bg-gray-50/50">
+                                <th class="px-8 py-5">日期</th>
+                                <th class="px-8 py-5">目标信源 / 链接数</th>
+                                <th class="px-8 py-5">成功抓取</th>
+                                <th class="px-8 py-5">状态</th>
+                                <th class="px-8 py-5 text-right">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody class="text-sm divide-y divide-gray-50">
+                            <tr>
+                                <td class="px-8 py-6 text-gray-500">2024-05-20</td>
+                                <td class="px-8 py-6">省政府网、发改委、工信部 (12个)</td>
+                                <td class="px-8 py-6 font-bold">45 篇</td>
+                                <td class="px-8 py-6"><span class="bg-green-50 text-green-600 px-3 py-1 rounded-md text-[10px] font-bold">入库完成</span></td>
+                                <td class="px-8 py-6 text-right"><button class="text-blue-600 font-bold hover:underline">下载 Word 报告</button></td>
+                            </tr>
+                            <tr>
+                                <td class="px-8 py-6 text-gray-500">2024-05-19</td>
+                                <td class="px-8 py-6">行业资讯、科技日报、宏观数据 (8个)</td>
+                                <td class="px-8 py-6 font-bold">22 篇</td>
+                                <td class="px-8 py-6"><span class="bg-green-50 text-green-600 px-3 py-1 rounded-md text-[10px] font-bold">入库完成</span></td>
+                                <td class="px-8 py-6 text-right"><button class="text-blue-600 font-bold hover:underline">下载 Word 报告</button></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        // ===================== 数据模型 =====================
+        const categories = [
+            '最新政策', '数字经济', '人工智能', '数据要素',
+            '通信', '申报', '潜在商机', '具身智能', '车路云协同',
+            '新型工业化', '算力'
+        ];
+
+        let articles = [
+            {
+                id: 1, title: '关于加快推进省级数字政府建设的指导意见', category: '最新政策', tags: ['最新政策', '数据要素'],
+                date: '2024-05-20', source: '省政府办公厅', url: 'gov.cn',
+                summary: '明确未来三年数字政府核心目标，强调数据要素流通与安全管控，要求年底前完成核心系统云端迁移。',
+                body: '<h3 class="text-2xl font-bold mb-6">第一章 总则</h3><p>为深入贯彻落实国家关于全面推进数字政府建设的战略部署，加快政府职能转变，现提出如下意见...</p>'
+            },
+            {
+                id: 2, title: '2024年一季度宏观数据分析报告', category: '数字经济', tags: ['数字经济'],
+                date: '2024-05-19', source: '国家发改委', url: 'ndrc.gov.cn',
+                summary: '一季度宏观经济总体平稳，数字经济贡献率持续提升，新兴产业投资增速明显。',
+                body: '<h3 class="text-2xl font-bold mb-6">第一章 总体概况</h3><p>2024年一季度，国内生产总值同比增长5.3%，其中数字经济核心产业增加值同比增长7.2%...</p>'
+            },
+            {
+                id: 3, title: '国家数据局发布数据要素流通管理办法征求意见稿', category: '数据要素', tags: ['数据要素', '最新政策'],
+                date: '2024-05-18', source: '国家数据局', url: 'snda.gov.cn',
+                summary: '规范数据要素流通与交易行为，建立健全数据产权制度，促进数据合规高效流通。',
+                body: '<h3 class="text-2xl font-bold mb-6">第一章 总则</h3><p>为规范数据要素流通与交易，保护数据权益，促进数字经济高质量发展...</p>'
+            },
+            {
+                id: 4, title: '工信部推动人工智能赋能新型工业化行动计划', category: '人工智能', tags: ['人工智能', '新型工业化'],
+                date: '2024-05-17', source: '工信部', url: 'miit.gov.cn',
+                summary: '加快推进AI技术与制造业深度融合，打造智能制造示范工厂，提升产业链智能化水平。',
+                body: '<h3 class="text-2xl font-bold mb-6">总体要求</h3><p>坚持以智能制造为主攻方向，推动人工智能在工业领域的规模化应用...</p>'
+            },
+            {
+                id: 5, title: '5G-A商用部署加速，通信产业迎来新机遇', category: '通信', tags: ['通信'],
+                date: '2024-05-16', source: '中国信通院', url: 'caict.ac.cn',
+                summary: '5G-A网络商用进入快车道，RedCap、通感一体等新技术开启规模化应用。',
+                body: '<h3 class="text-2xl font-bold mb-6">产业动态</h3><p>5G-A作为5G向6G演进的关键阶段，其商用部署正在全国范围内加速推进...</p>'
+            },
+            {
+                id: 6, title: '具身智能机器人产业发展白皮书发布', category: '具身智能', tags: ['具身智能', '人工智能'],
+                date: '2024-05-15', source: '中国信通院', url: 'caict.ac.cn',
+                summary: '系统梳理具身智能产业链，提出关键技术路线图和产业发展建议。',
+                body: '<h3 class="text-2xl font-bold mb-6">概述</h3><p>具身智能是人工智能与机器人技术深度融合的新方向，正成为产业竞争的新焦点...</p>'
+            },
+            {
+                id: 7, title: '车路云一体化试点城市建设方案出台', category: '车路云协同', tags: ['车路云协同'],
+                date: '2024-05-14', source: '交通运输部', url: 'mot.gov.cn',
+                summary: '推进智能网联汽车与道路基础设施协同，开展车路云一体化试点城市建设。',
+                body: '<h3 class="text-2xl font-bold mb-6">试点目标</h3><p>通过车路云一体化技术路线，提升道路交通效率和安全性，推动智能网联汽车产业化...</p>'
+            },
+            {
+                id: 8, title: '算力基础设施建设三年行动计划正式发布', category: '算力', tags: ['算力', '数字经济'],
+                date: '2024-05-13', source: '国家发改委', url: 'ndrc.gov.cn',
+                summary: '统筹布局全国一体化算力网络，提升算力资源调度效率，降低算力使用成本。',
+                body: '<h3 class="text-2xl font-bold mb-6">总体目标</h3><p>到2026年底，建成覆盖全国的智能算力网络体系，算力规模达到新的台阶...</p>'
+            },
+            {
+                id: 9, title: '新一代人工智能重大科技项目申报指南发布', category: '申报', tags: ['申报', '人工智能'],
+                date: '2024-05-12', source: '科技部', url: 'most.gov.cn',
+                summary: '围绕大模型、多模态智能、具身智能等方向，启动新一轮国家科技重大专项申报。',
+                body: '<h3 class="text-2xl font-bold mb-6">申报方向</h3><p>本次申报重点支持具有自主知识产权的原创性AI技术研究和产业化应用...</p>'
+            },
+            {
+                id: 10, title: '智慧城市领域潜在商机分析报告', category: '潜在商机', tags: ['潜在商机', '数字经济'],
+                date: '2024-05-11', source: '赛迪顾问', url: 'ccidnet.com',
+                summary: '智慧城市市场规模持续扩大，AI+城市治理、数字孪生等领域存在大量商业机会。',
+                body: '<h3 class="text-2xl font-bold mb-6">市场概览</h3><p>2024年中国智慧城市市场规模预计突破万亿，其中AI+城市治理增速最快...</p>'
+            }
+        ];
+
+        let currentCategory = '全部';
+        let currentArticleId = null;
+        let searchQuery = '';
+        let logInterval = null;
+
+        // ===================== 导航切换 =====================
+        function switchTab(id, el) {
+            document.querySelectorAll('.view-section').forEach(s => s.classList.remove('active'));
+            document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('nav-active'));
+
+            const target = document.getElementById('view-' + id);
+            if(target) target.classList.add('active');
+            el.classList.add('nav-active');
+
+            if(id === 'dashboard') {
+                setTimeout(initCharts, 50);
+            }
+        }
+
+        // ===================== 采集岛：日期选择 =====================
+        function openDatePicker() {
+            const panel = document.getElementById('datePickerPanel');
+            panel.classList.toggle('hidden');
+        }
+
+        function handleDateChange(select) {
+            if (select.value !== '自定义日期...') {
+                const oldOpt = select.querySelector('option[data-custom]');
+                if (oldOpt) oldOpt.remove();
+                document.getElementById('datePickerPanel').classList.add('hidden');
+            }
+            if (select.value === '自定义日期...') {
+                openDatePicker();
+            }
+        }
+
+        function handleRangeChange() {
+            const start = document.getElementById('startDate').value;
+            const end = document.getElementById('endDate').value;
+            if (start && end) {
+                confirmDateRange();
+            }
+        }
+
+        function confirmDateRange() {
+            const start = document.getElementById('startDate').value;
+            const end = document.getElementById('endDate').value;
+            if (!start || !end) return;
+
+            const select = document.getElementById('dateRange');
+            const oldOpt = select.querySelector('option[data-custom]');
+            if (oldOpt) oldOpt.remove();
+
+            const opt = document.createElement('option');
+            opt.setAttribute('data-custom', 'true');
+            opt.textContent = `${start} ~ ${end}`;
+            select.insertBefore(opt, select.options[select.options.length - 1]);
+            opt.selected = true;
+
+            document.getElementById('datePickerPanel').classList.add('hidden');
+        }
+
+        // ===================== 采集岛：实时日志 =====================
+        function startCrawl() {
+            const logPanel = document.getElementById('logPanel');
+            const logContent = document.getElementById('logContent');
+            logPanel.classList.remove('hidden');
+            logContent.innerHTML = '';
+
+            const urls = [
+                'https://www.gov.cn/zhengce/2024-05/20/content_12345678.htm',
+                'https://www.ndrc.gov.cn/xxgk/zcwj/wj/202405/t20240519_123456.html',
+                'https://www.miit.gov.cn/jgsj/wgj/wjfb/art/2024/art_123456789.html',
+                'https://www.example.com/news/ai-policy-2024.html',
+                'https://www.industry.gov.cn/gzdt/wjfb/202405/t20240518_123.html',
+                'https://www.caict.ac.cn/kxyj/qwfb/ztbg/202405/t20240517_123456.html'
+            ];
+
+            let idx = 0;
+            if (logInterval) clearInterval(logInterval);
+
+            addLog('系统初始化完成，开始采集任务...');
+
+            logInterval = setInterval(() => {
+                if (idx < urls.length) {
+                    const time = new Date().toLocaleTimeString('zh-CN', {hour12: false});
+                    addLog(`[${time}] 正在解析: ${urls[idx]}`);
+                    idx++;
+                } else {
+                    clearInterval(logInterval);
+                    addLog(`✓ 采集完成，共处理 ${urls.length} 条链接`, true);
+                }
+            }, 700);
+        }
+
+        function addLog(msg, isDone = false) {
+            const logContent = document.getElementById('logContent');
+            const line = document.createElement('div');
+            line.textContent = msg;
+            line.className = isDone ? 'log-done' : '';
+            logContent.appendChild(line);
+            logContent.scrollTop = logContent.scrollHeight;
+        }
+
+        // ===================== 数据库：分类 Sidebar =====================
+        function setCategory(cat) {
+            currentCategory = cat;
+            document.querySelectorAll('.sidebar-item').forEach(el => {
+                const text = el.textContent.trim();
+                if (text === cat) {
+                    el.className = 'sidebar-item px-4 py-3 rounded-xl text-sm bg-blue-50 text-blue-600 font-bold cursor-pointer';
+                } else {
+                    el.className = 'sidebar-item px-4 py-3 rounded-xl text-sm text-gray-500 hover:bg-gray-50 cursor-pointer';
+                }
+            });
+            renderArticleList();
+        }
+
+        // ===================== 数据库：搜索 =====================
+        function handleSearch() {
+            searchQuery = document.getElementById('searchInput').value;
+            renderArticleList();
+        }
+
+        // ===================== 数据库：文章列表渲染 =====================
+        function renderArticleList() {
+            let filtered = articles;
+            if (currentCategory !== '全部') {
+                filtered = filtered.filter(a => a.category === currentCategory);
+            }
+            if (searchQuery.trim()) {
+                const q = searchQuery.toLowerCase();
+                filtered = filtered.filter(a => a.title.toLowerCase().includes(q));
+            }
+
+            const container = document.getElementById('articleListContainer');
+            if (filtered.length === 0) {
+                container.innerHTML = '<div class="text-center text-gray-400 text-xs py-10">暂无匹配文章</div>';
+            } else {
+                container.innerHTML = filtered.map(article => `
+                    <div onclick="showContent(${article.id})" class="p-5 rounded-2xl border ${article.id === currentArticleId ? 'border-blue-200 card-shadow bg-white' : 'border-gray-100 bg-white hover:border-gray-200 transition'} cursor-pointer">
+                        <div class="flex justify-between text-[10px] text-gray-400 mb-2">
+                            <span>🕒 ${article.date}</span>
+                            <span class="bg-gray-50 px-2 py-0.5 rounded">${article.source}</span>
+                        </div>
+                        <h4 class="text-[15px] font-bold ${article.id === currentArticleId ? 'text-blue-600' : 'text-gray-800'} leading-snug mb-3">${article.title}</h4>
+                        <div class="flex gap-2 flex-wrap">
+                            ${article.tags.slice(0, 3).map(tag => `<span class="text-[10px] bg-blue-50 text-blue-500 px-2 py-0.5 rounded">${tag}</span>`).join('')}
+                        </div>
+                    </div>
+                `).join('');
+            }
+
+            document.getElementById('articleCount').textContent = `共 ${filtered.length} 篇`;
+            document.getElementById('listTitle').textContent = currentCategory === '全部' ? '全部 列表' : currentCategory + ' 列表';
+        }
+
+        // ===================== 数据库：显示详情 =====================
+        function showContent(id) {
+            currentArticleId = id;
+            const article = articles.find(a => a.id === id);
+            if (!article) return;
+
+            document.getElementById('content-placeholder').classList.add('hidden');
+            document.getElementById('content-body').classList.remove('hidden');
+
+            renderDetail(article);
+            renderArticleList();
+
+            // 关闭可能打开的面板
+            document.getElementById('categoryPanel').classList.add('hidden');
+            document.getElementById('tagPanel').classList.add('hidden');
+        }
+
+        function renderDetail(article) {
+            document.getElementById('detailSource').textContent = article.source;
+            document.getElementById('detailDate').textContent = article.date;
+            document.getElementById('detailCategory').textContent = article.category;
+            document.getElementById('detailTitle').textContent = article.title;
+            document.getElementById('detailSummary').textContent = article.summary;
+            document.getElementById('detailBody').innerHTML = article.body;
+            renderTags(article);
+        }
+
+        function getCurrentArticle() {
+            return articles.find(a => a.id === currentArticleId);
+        }
+
+        // ===================== 数据库：标签系统 =====================
+        function renderTags(article) {
+            const container = document.getElementById('tagContainer');
+            if (!article.tags || article.tags.length === 0) {
+                container.innerHTML = '<span class="text-xs text-gray-300">暂无标签</span>';
+                return;
+            }
+            container.innerHTML = article.tags.map(tag => `
+                <span class="px-4 py-2 bg-white border border-gray-200 rounded-lg text-xs flex items-center gap-2">
+                    ${tag}
+                    <button onclick="removeTag('${tag}')" class="text-gray-400 hover:text-red-500 font-bold leading-none">×</button>
+                </span>
+            `).join('');
+        }
+
+        function toggleTagPanel() {
+            const panel = document.getElementById('tagPanel');
+            const isHidden = panel.classList.contains('hidden');
+            // 关闭另一个面板
+            document.getElementById('categoryPanel').classList.add('hidden');
+
+            if (isHidden) {
+                const article = getCurrentArticle();
+                if (!article) return;
+                const options = document.getElementById('tagOptions');
+                options.innerHTML = categories.map(c => `
+                    <label class="flex items-center gap-1.5 px-2 py-1.5 bg-gray-50 rounded-lg text-xs cursor-pointer hover:bg-blue-50 hover:text-blue-600 transition select-none">
+                        <input type="checkbox" ${article.tags.includes(c) ? 'checked' : ''} onchange="toggleTagValue('${c}')" class="accent-blue-600 w-3.5 h-3.5">
+                        ${c}
+                    </label>
+                `).join('');
+                panel.classList.remove('hidden');
+            } else {
+                panel.classList.add('hidden');
+            }
+        }
+
+        function toggleTagValue(tag) {
+            const article = getCurrentArticle();
+            if (!article) return;
+            if (article.tags.includes(tag)) {
+                article.tags = article.tags.filter(t => t !== tag);
+            } else {
+                article.tags.push(tag);
+            }
+            renderTags(article);
+            renderArticleList();
+            // 刷新面板内checkbox状态
+            const panel = document.getElementById('tagPanel');
+            if (!panel.classList.contains('hidden')) {
+                toggleTagPanel();
+                toggleTagPanel();
+            }
+        }
+
+        function removeTag(tag) {
+            const article = getCurrentArticle();
+            if (!article) return;
+            article.tags = article.tags.filter(t => t !== tag);
+            renderTags(article);
+            renderArticleList();
+        }
+
+        // ===================== 数据库：主分类修改 =====================
+        function toggleCategoryPanel() {
+            const panel = document.getElementById('categoryPanel');
+            const isHidden = panel.classList.contains('hidden');
+            document.getElementById('tagPanel').classList.add('hidden');
+
+            if (isHidden) {
+                const article = getCurrentArticle();
+                if (!article) return;
+                const options = document.getElementById('categoryOptions');
+                options.innerHTML = categories.map(c => `
+                    <div onclick="changeCategory('${c}')" class="px-3 py-2 rounded-lg hover:bg-blue-50 hover:text-blue-600 cursor-pointer text-sm transition ${c === article.category ? 'bg-blue-50 text-blue-600 font-bold' : 'text-gray-600'}">
+                        ${c}
+                    </div>
+                `).join('');
+                panel.classList.remove('hidden');
+            } else {
+                panel.classList.add('hidden');
+            }
+        }
+
+        function changeCategory(newCat) {
+            const article = getCurrentArticle();
+            if (!article) return;
+            article.category = newCat;
+            renderDetail(article);
+
+            // 如果当前列表是按分类筛选的，且文章已不在该分类中，需要从列表消失
+            renderArticleList();
+
+            // 如果当前选中的分类不是全部，且文章已移出该分类，清空详情
+            if (currentCategory !== '全部' && article.category !== currentCategory) {
+                currentArticleId = null;
+                document.getElementById('content-body').classList.add('hidden');
+                document.getElementById('content-placeholder').classList.remove('hidden');
+            }
+
+            document.getElementById('categoryPanel').classList.add('hidden');
+        }
+
+        // ===================== 图表 =====================
+        let charts = {};
+        function initCharts() {
+            const pieEl = document.getElementById('pieChart');
+            const lineEl = document.getElementById('lineChart');
+            if (!pieEl || !lineEl) return;
+
+            if(charts.pie) charts.pie.destroy();
+            if(charts.line) charts.line.destroy();
+
+            const ctxPie = pieEl.getContext('2d');
+            charts.pie = new Chart(ctxPie, {
+                type: 'doughnut',
+                data: {
+                    labels: ['最新政策', '数字经济', '人工智能', '数据要素', '通信'],
+                    datasets: [{
+                        data: [30, 25, 20, 15, 10],
+                        backgroundColor: ['#3B82F6', '#60A5FA', '#93C5FD', '#BFDBFE', '#CBD5E1'],
+                        borderWidth: 0
+                    }]
+                },
+                options: { maintainAspectRatio: false, cutout: '70%', plugins: { legend: { position: 'right' } } }
+            });
+
+            const ctxLine = lineEl.getContext('2d');
+            charts.line = new Chart(ctxLine, {
+                type: 'line',
+                data: {
+                    labels: ['M', 'T', 'W', 'T', 'F', 'S', 'S'],
+                    datasets: [{
+                        data: [65, 59, 80, 81, 56, 55, 40],
+                        borderColor: '#3B82F6',
+                        tension: 0.4,
+                        fill: false
+                    }]
+                },
+                options: { maintainAspectRatio: false, plugins: { legend: { display: false } } }
+            });
+        }
+
+        // ===================== 数据库表格 =====================
+        let dbFiltered = [];
+        let dbCurrentPage = 1;
+        const dbPageSize = 5;
+        let dbSelectedIds = new Set();
+
+        function initDbTable() {
+            dbFiltered = [...articles];
+            dbCurrentPage = 1;
+            dbSelectedIds.clear();
+            renderDbTable();
+            renderPagination();
+            updateSelectedCount();
+        }
+
+        function handleDbSearch() {
+            const keyword = document.getElementById('dbSearchInput').value.toLowerCase();
+            const cat = document.getElementById('dbCategoryFilter').value;
+            const start = document.getElementById('dbStartDate').value;
+            const end = document.getElementById('dbEndDate').value;
+
+            dbFiltered = articles.filter(a => {
+                const matchKeyword = !keyword || a.title.toLowerCase().includes(keyword) || (a.summary && a.summary.toLowerCase().includes(keyword));
+                const matchCat = cat === '全部' || a.category === cat;
+                const matchDate = (!start || a.date >= start) && (!end || a.date <= end);
+                return matchKeyword && matchCat && matchDate;
+            });
+
+            dbCurrentPage = 1;
+            dbSelectedIds.clear();
+            document.getElementById('selectAll').checked = false;
+            renderDbTable();
+            renderPagination();
+            updateSelectedCount();
+        }
+
+        function resetDbFilters() {
+            document.getElementById('dbSearchInput').value = '';
+            document.getElementById('dbCategoryFilter').value = '全部';
+            document.getElementById('dbStartDate').value = '';
+            document.getElementById('dbEndDate').value = '';
+            handleDbSearch();
+        }
+
+        function getCategoryBadgeClass(category) {
+            const map = {
+                '最新政策': 'bg-blue-100 text-blue-700',
+                '数字经济': 'bg-purple-100 text-purple-700',
+                '人工智能': 'bg-indigo-100 text-indigo-700',
+                '数据要素': 'bg-cyan-100 text-cyan-700',
+                '通信': 'bg-teal-100 text-teal-700',
+                '申报': 'bg-orange-100 text-orange-700',
+                '潜在商机': 'bg-pink-100 text-pink-700',
+                '具身智能': 'bg-rose-100 text-rose-700',
+                '车路云协同': 'bg-emerald-100 text-emerald-700',
+                '新型工业化': 'bg-violet-100 text-violet-700',
+                '算力': 'bg-sky-100 text-sky-700'
+            };
+            return map[category] || 'bg-gray-100 text-gray-700';
+        }
+
+        function renderDbTable() {
+            const tbody = document.getElementById('dbTableBody');
+            const start = (dbCurrentPage - 1) * dbPageSize;
+            const pageData = dbFiltered.slice(start, start + dbPageSize);
+
+            if (pageData.length === 0) {
+                tbody.innerHTML = `
+                    <tr><td colspan="7" class="py-10 text-center text-gray-400 text-sm">暂无匹配数据</td></tr>
+                `;
+                return;
+            }
+
+            tbody.innerHTML = pageData.map(item => `
+                <tr class="border-b border-gray-50 hover:bg-blue-50/50 transition-colors group">
+                    <td class="py-4 px-6 text-center">
+                        <input type="checkbox" class="w-4 h-4 rounded border-gray-300 text-blue-600 db-row-checkbox" data-id="${item.id}" ${dbSelectedIds.has(item.id) ? 'checked' : ''} onchange="toggleRowSelect(${item.id})">
+                    </td>
+                    <td class="py-4 px-4">
+                        <span class="text-blue-600 hover:underline cursor-pointer font-medium line-clamp-1" title="${item.title}">${item.title}</span>
+                    </td>
+                    <td class="py-4 px-4 text-gray-500">${item.source}</td>
+                    <td class="py-4 px-4 text-gray-400 italic font-light">${item.date}</td>
+                    <td class="py-4 px-4">
+                        <span class="inline-block px-3 py-0.5 rounded text-xs font-medium ${getCategoryBadgeClass(item.category)}">${item.category}</span>
+                    </td>
+                    <td class="py-4 px-4">
+                        <div class="flex items-center gap-1 text-gray-300 group-hover:text-blue-400 cursor-pointer transition-colors" title="${item.url}">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" x2="21" y1="14" y2="3"/></svg>
+                            <span class="text-xs truncate max-w-[120px]">${item.url}</span>
+                        </div>
+                    </td>
+                    <td class="py-4 px-4">
+                        <div class="flex items-center justify-center gap-4">
+                            <button onclick="alert('标题：${item.title.replace(/'/g, "\\'")}\\n\\n${item.summary}')" class="text-blue-600 hover:text-blue-800 font-medium">查看</button>
+                            <button onclick="deleteArticle(${item.id})" class="text-red-400 hover:text-red-600">删除</button>
+                        </div>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        function renderPagination() {
+            const totalPages = Math.ceil(dbFiltered.length / dbPageSize) || 1;
+            const nav = document.getElementById('dbPagination');
+            let html = '';
+
+            html += `<button onclick="goToPage(${dbCurrentPage - 1})" class="px-3 py-1.5 border border-gray-200 rounded hover:bg-gray-100 text-sm bg-white transition-colors ${dbCurrentPage === 1 ? 'opacity-50 cursor-not-allowed' : ''}">上一页</button>`;
+
+            for (let i = 1; i <= totalPages; i++) {
+                if (i === dbCurrentPage) {
+                    html += `<button class="px-3.5 py-1.5 bg-blue-600 text-white rounded text-sm font-medium shadow-sm">${i}</button>`;
+                } else {
+                    html += `<button onclick="goToPage(${i})" class="px-3.5 py-1.5 border border-gray-200 rounded hover:bg-gray-100 text-sm bg-white transition-colors">${i}</button>`;
+                }
+            }
+
+            html += `<button onclick="goToPage(${dbCurrentPage + 1})" class="px-3 py-1.5 border border-gray-200 rounded hover:bg-gray-100 text-sm bg-white transition-colors ${dbCurrentPage === totalPages ? 'opacity-50 cursor-not-allowed' : ''}">下一页</button>`;
+
+            nav.innerHTML = html;
+        }
+
+        function goToPage(page) {
+            const totalPages = Math.ceil(dbFiltered.length / dbPageSize) || 1;
+            if (page < 1 || page > totalPages) return;
+            dbCurrentPage = page;
+            renderDbTable();
+            renderPagination();
+        }
+
+        function toggleRowSelect(id) {
+            if (dbSelectedIds.has(id)) {
+                dbSelectedIds.delete(id);
+            } else {
+                dbSelectedIds.add(id);
+            }
+            updateSelectedCount();
+            updateSelectAllState();
+        }
+
+        function toggleSelectAll() {
+            const checked = document.getElementById('selectAll').checked;
+            const pageIds = dbFiltered.slice((dbCurrentPage - 1) * dbPageSize, dbCurrentPage * dbPageSize).map(a => a.id);
+            if (checked) {
+                pageIds.forEach(id => dbSelectedIds.add(id));
+            } else {
+                pageIds.forEach(id => dbSelectedIds.delete(id));
+            }
+            renderDbTable();
+            updateSelectedCount();
+        }
+
+        function updateSelectAllState() {
+            const pageIds = dbFiltered.slice((dbCurrentPage - 1) * dbPageSize, dbCurrentPage * dbPageSize).map(a => a.id);
+            const allSelected = pageIds.length > 0 && pageIds.every(id => dbSelectedIds.has(id));
+            document.getElementById('selectAll').checked = allSelected;
+        }
+
+        function updateSelectedCount() {
+            document.getElementById('selectedCount').textContent = dbSelectedIds.size;
+        }
+
+        function deleteArticle(id) {
+            if (!confirm('确定要删除这篇文章吗？')) return;
+            articles = articles.filter(a => a.id !== id);
+            dbSelectedIds.delete(id);
+            handleDbSearch();
+        }
+
+        function batchDelete() {
+            if (dbSelectedIds.size === 0) {
+                alert('请先选择要删除的文章');
+                return;
+            }
+            if (!confirm(`确定要删除选中的 ${dbSelectedIds.size} 篇文章吗？`)) return;
+            articles = articles.filter(a => !dbSelectedIds.has(a.id));
+            dbSelectedIds.clear();
+            document.getElementById('selectAll').checked = false;
+            handleDbSearch();
+        }
+
+        function exportWord() {
+            if (dbSelectedIds.size === 0) {
+                alert('请先选择要导出的文章');
+                return;
+            }
+            const selected = articles.filter(a => dbSelectedIds.has(a.id));
+            let content = selected.map(a => `标题：${a.title}\n分类：${a.category}\n日期：${a.date}\n来源：${a.source}\n摘要：${a.summary}\n\n`).join('---\n\n');
+            const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `拾讯精选报告_${new Date().toISOString().slice(0,10)}.txt`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            alert(`已导出 ${selected.length} 篇文章`);
+        }
+
+        // ===================== 初始化 =====================
+        window.onload = () => {
+            initCharts();
+            initDbTable();
+        };
+    </script>
+</body>
+</html>

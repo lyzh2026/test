@@ -1,0 +1,107 @@
+<h2>Arc 毛玻璃风 · 详细设计</h2>
+<p class="subtitle">确认以下设计要点，逐项浏览</p>
+
+<div class="section">
+  <h3>🎨 色彩系统</h3>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:12px;">
+    <div style="background:#f5f5f0;border-radius:12px;padding:16px;box-shadow:0 2px 8px rgba(0,0,0,0.04);">
+      <div style="font-size:12px;font-weight:600;color:#666;text-transform:uppercase;margin-bottom:8px;">背景底色</div>
+      <div style="display:flex;align-items:center;gap:12px;">
+        <div style="width:32px;height:32px;border-radius:8px;background:#f5f5f0;border:1px solid #e5e5e0;"></div>
+        <code style="font-size:14px;">#f5f5f0</code><span style="color:#999;font-size:13px;">暖白基调</span>
+      </div>
+    </div>
+    <div style="background:#f5f5f0;border-radius:12px;padding:16px;box-shadow:0 2px 8px rgba(0,0,0,0.04);">
+      <div style="font-size:12px;font-weight:600;color:#666;text-transform:uppercase;margin-bottom:8px;">品牌色</div>
+      <div style="display:flex;align-items:center;gap:12px;">
+        <div style="width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#f97316,#fb923c);"></div>
+        <code style="font-size:14px;">#f97316</code><span style="color:#999;font-size:13px;">暖橙</span>
+      </div>
+    </div>
+    <div style="background:#f5f5f0;border-radius:12px;padding:16px;box-shadow:0 2px 8px rgba(0,0,0,0.04);">
+      <div style="font-size:12px;font-weight:600;color:#666;text-transform:uppercase;margin-bottom:8px;">主文本</div>
+      <div style="display:flex;align-items:center;gap:12px;">
+        <div style="width:32px;height:32px;border-radius:8px;background:#1c1c1c;"></div>
+        <code style="font-size:14px;">#1c1c1c</code><span style="color:#999;font-size:13px;">近黑，非纯黑</span>
+      </div>
+    </div>
+    <div style="background:#f5f5f0;border-radius:12px;padding:16px;box-shadow:0 2px 8px rgba(0,0,0,0.04);">
+      <div style="font-size:12px;font-weight:600;color:#666;text-transform:uppercase;margin-bottom:8px;">辅助文本</div>
+      <div style="display:flex;align-items:center;gap:12px;">
+        <div style="width:32px;height:32px;border-radius:8px;background:#a3a3a3;"></div>
+        <code style="font-size:14px;">#a3a3a3</code><span style="color:#999;font-size:13px;">暖灰</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>📐 布局</h3>
+  <div style="display:flex;gap:16px;margin-top:12px;">
+    <div style="flex:1;background:#fff;border-radius:16px;padding:20px;box-shadow:0 4px 24px rgba(0,0,0,0.06);">
+      <div style="display:flex;gap:16px;">
+        <div style="width:60px;border-radius:12px;background:rgba(249,115,22,0.08);backdrop-filter:blur(20px);padding:12px;display:flex;flex-direction:column;align-items:center;gap:16px;">
+          <div style="width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,#f97316,#fb923c);color:white;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;">拾</div>
+          <div style="width:6px;height:6px;border-radius:3px;background:#d4d4d4;"></div>
+          <div style="width:6px;height:6px;border-radius:3px;background:#d4d4d4;"></div>
+          <div style="width:6px;height:6px;border-radius:3px;background:#d4d4d4;"></div>
+        </div>
+        <div style="flex:1;">
+          <div style="background:rgba(255,255,255,0.6);backdrop-filter:blur(12px);border-radius:12px;padding:16px;box-shadow:0 2px 8px rgba(0,0,0,0.04);border:1px solid rgba(0,0,0,0.04);">
+            <div style="display:flex;justify-content:space-between;margin-bottom:16px;">
+              <div style="width:100px;height:10px;border-radius:4px;background:#e5e5e0;"></div>
+              <div style="width:60px;height:10px;border-radius:4px;background:#e5e5e0;"></div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+              <div style="background:rgba(255,255,255,0.8);border-radius:12px;padding:12px;height:40px;"></div>
+              <div style="background:rgba(255,255,255,0.8);border-radius:12px;padding:12px;height:40px;"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <ul style="margin-top:12px;color:#666;font-size:14px;line-height:1.8;">
+    <li><strong>侧边栏</strong> → 窄版图标栏（60px），毛玻璃半透明背景，悬浮效果</li>
+    <li><strong>内容区</strong> → 暖白底色，卡片用毛玻璃 + 柔和阴影</li>
+    <li><strong>圆角</strong> → 侧边栏 12px，卡片 12-16px，按钮 10px，徽标 9999px</li>
+  </ul>
+</div>
+
+<div class="section">
+  <h3>🪟 毛玻璃层次</h3>
+  <div style="display:flex;gap:16px;margin-top:12px;">
+    <div style="flex:1;background:rgba(255,255,255,0.4);backdrop-filter:blur(8px);border-radius:12px;padding:20px;border:1px solid rgba(255,255,255,0.6);">
+      <div style="font-size:12px;font-weight:600;color:#999;text-transform:uppercase;margin-bottom:4px;">Level 1 · 背景层</div>
+      <div style="font-size:13px;color:#666;"><code>backdrop-filter: blur(8px)</code> · 侧边栏背景</div>
+    </div>
+    <div style="flex:1;background:rgba(255,255,255,0.6);backdrop-filter:blur(12px);border-radius:12px;padding:20px;border:1px solid rgba(255,255,255,0.7);">
+      <div style="font-size:12px;font-weight:600;color:#999;text-transform:uppercase;margin-bottom:4px;">Level 2 · 卡片层</div>
+      <div style="font-size:13px;color:#666;"><code>backdrop-filter: blur(12px)</code> · 标准卡片</div>
+    </div>
+    <div style="flex:1;background:rgba(255,255,255,0.8);backdrop-filter:blur(16px);border-radius:12px;padding:20px;border:1px solid rgba(255,255,255,0.8);">
+      <div style="font-size:12px;font-weight:600;color:#999;text-transform:uppercase;margin-bottom:4px;">Level 3 · 浮动层</div>
+      <div style="font-size:13px;color:#666;"><code>backdrop-filter: blur(16px)</code> · 模态框/下拉</div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>✅ 待确认</h3>
+  <div class="options">
+    <div class="option" data-choice="narrow-sidebar" onclick="toggleSelect(this)">
+      <div class="letter">1</div>
+      <div class="content">
+        <h3>窄侧边栏（60px 图标栏）</h3>
+        <p>仅图标，hover 展开文字提示。类似 Arc 浏览器侧栏</p>
+      </div>
+    </div>
+    <div class="option" data-choice="wide-sidebar" onclick="toggleSelect(this)">
+      <div class="letter">2</div>
+      <div class="content">
+        <h3>宽侧边栏（200px 含文字）</h3>
+        <p>图标 + 标签文字，类似现在的布局但换毛玻璃</p>
+      </div>
+    </div>
+  </div>
+</div>

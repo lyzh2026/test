@@ -1,0 +1,137 @@
+<h2>🎨 拾讯 · 设计方案选择</h2>
+<p class="subtitle">基于获奖设计作品分析，以下3种风格方向可选。点击你最中意的。</p>
+
+<div class="cards">
+  <!-- Option A: Vercel -->
+  <div class="card" data-choice="vercel" onclick="toggleSelect(this)">
+    <div class="card-image" style="background:#fff;border-bottom:1px solid #eee;padding:16px;font-family:sans-serif;color:#171717;">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
+        <span style="font-weight:700;font-size:16px;">拾讯</span>
+        <span style="font-size:12px;color:#666;">看板</span>
+        <span style="font-size:12px;color:#666;">任务</span>
+        <span style="font-size:12px;color:#666;">文章</span>
+        <div style="margin-left:auto;font-size:12px;color:#666;">退出</div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:16px;">
+        <div style="border-radius:8px;padding:12px;background:#fafafa;box-shadow:0px 0px 0px 1px rgba(0,0,0,0.08);">
+          <div style="font-size:11px;color:#666;">近14天采集</div>
+          <div style="font-size:24px;font-weight:700;">1,284</div>
+        </div>
+        <div style="border-radius:8px;padding:12px;background:#fafafa;box-shadow:0px 0px 0px 1px rgba(0,0,0,0.08);">
+          <div style="font-size:11px;color:#666;">已处理</div>
+          <div style="font-size:24px;font-weight:700;">956</div>
+        </div>
+        <div style="border-radius:8px;padding:12px;background:#fafafa;box-shadow:0px 0px 0px 1px rgba(0,0,0,0.08);">
+          <div style="font-size:11px;color:#666;">失败</div>
+          <div style="font-size:24px;font-weight:700;color:#ff5b4f;">23</div>
+        </div>
+        <div style="border-radius:8px;padding:12px;background:#fafafa;box-shadow:0px 0px 0px 1px rgba(0,0,0,0.08);">
+          <div style="font-size:11px;color:#666;">分类</div>
+          <div style="font-size:24px;font-weight:700;">12</div>
+        </div>
+      </div>
+      <div style="height:40px;background:#f5f5f5;border-radius:4px;margin-bottom:8px;display:flex;align-items:flex-end;padding:0 4px;gap:2px;">
+        <div style="flex:1;height:60%;background:#0072f5;border-radius:2px 2px 0 0"></div>
+        <div style="flex:1;height:80%;background:#0072f5;border-radius:2px 2px 0 0"></div>
+        <div style="flex:1;height:45%;background:#0072f5;border-radius:2px 2px 0 0"></div>
+        <div style="flex:1;height:90%;background:#0072f5;border-radius:2px 2px 0 0"></div>
+        <div style="flex:1;height:70%;background:#0072f5;border-radius:2px 2px 0 0"></div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>方案 A：Vercel 极简风</h3>
+      <p>白底 + Geist 字体 + 阴影边框替代传统 border。极简工程感，信息密度高。适合开发者工具类产品。</p>
+      <div class="label">参考：Vercel Dashboard</div>
+    </div>
+  </div>
+
+  <!-- Option B: Linear -->
+  <div class="card" data-choice="linear" onclick="toggleSelect(this)">
+    <div class="card-image" style="background:#0a0a0b;padding:16px;font-family:sans-serif;color:#e1e1e1;">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
+        <span style="font-weight:700;font-size:16px;color:#fff;">拾讯</span>
+        <span style="font-size:12px;color:#888;">看板</span>
+        <span style="font-size:12px;color:#888;">任务</span>
+        <span style="font-size:12px;color:#888;">文章</span>
+        <div style="margin-left:auto;font-size:12px;color:#666;">退出</div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:16px;">
+        <div style="border-radius:8px;padding:12px;background:#141416;border:1px solid #1f1f23;">
+          <div style="font-size:11px;color:#666;">近14天采集</div>
+          <div style="font-size:24px;font-weight:700;color:#fff;">1,284</div>
+        </div>
+        <div style="border-radius:8px;padding:12px;background:#141416;border:1px solid #1f1f23;">
+          <div style="font-size:11px;color:#666;">已处理</div>
+          <div style="font-size:24px;font-weight:700;color:#fff;">956</div>
+        </div>
+        <div style="border-radius:8px;padding:12px;background:#141416;border:1px solid #1f1f23;">
+          <div style="font-size:11px;color:#666;">失败</div>
+          <div style="font-size:24px;font-weight:700;color:#f04;">23</div>
+        </div>
+        <div style="border-radius:8px;padding:12px;background:#141416;border:1px solid #1f1f23;">
+          <div style="font-size:11px;color:#666;">分类</div>
+          <div style="font-size:24px;font-weight:700;color:#fff;">12</div>
+        </div>
+      </div>
+      <div style="height:40px;background:#141416;border-radius:4px;border:1px solid #1f1f23;display:flex;align-items:flex-end;padding:0 4px;gap:2px;">
+        <div style="flex:1;height:60%;background:#5e6ad2;border-radius:2px 2px 0 0"></div>
+        <div style="flex:1;height:80%;background:#5e6ad2;border-radius:2px 2px 0 0"></div>
+        <div style="flex:1;height:45%;background:#5e6ad2;border-radius:2px 2px 0 0"></div>
+        <div style="flex:1;height:90%;background:#5e6ad2;border-radius:2px 2px 0 0"></div>
+        <div style="flex:1;height:70%;background:#5e6ad2;border-radius:2px 2px 0 0"></div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>方案 B：Linear 暗色风</h3>
+      <p>深色主题 + 紫蓝品牌色 + 键盘优先交互。沉浸感强，数据在暗色背景下更突出。适合重数据分析场景。</p>
+      <div class="label">参考：Linear App</div>
+    </div>
+  </div>
+
+  <!-- Option C: Stripe -->
+  <div class="card" data-choice="stripe" onclick="toggleSelect(this)">
+    <div class="card-image" style="background:#fff;padding:16px;font-family:sans-serif;color:#061b31;">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
+        <span style="font-weight:700;font-size:16px;color:#533afd;">拾讯</span>
+        <span style="font-size:12px;color:#64748d;">看板</span>
+        <span style="font-size:12px;color:#64748d;">任务</span>
+        <span style="font-size:12px;color:#64748d;">文章</span>
+        <div style="margin-left:auto;font-size:12px;color:#64748d;">退出</div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;">
+        <div style="border-radius:8px;padding:16px;background:#fff;box-shadow:rgba(50,50,93,0.25) 0px 2px 5px -1px, rgba(0,0,0,0.1) 0px 1px 3px -1px;">
+          <div style="font-size:11px;color:#64748d;">近14天采集</div>
+          <div style="font-size:22px;font-weight:700;color:#061b31;">1,284</div>
+        </div>
+        <div style="border-radius:8px;padding:16px;background:#fff;box-shadow:rgba(50,50,93,0.25) 0px 2px 5px -1px, rgba(0,0,0,0.1) 0px 1px 3px -1px;">
+          <div style="font-size:11px;color:#64748d;">已处理</div>
+          <div style="font-size:22px;font-weight:700;color:#061b31;">956</div>
+        </div>
+        <div style="border-radius:8px;padding:16px;background:#fff;box-shadow:rgba(50,50,93,0.25) 0px 2px 5px -1px, rgba(0,0,0,0.1) 0px 1px 3px -1px;">
+          <div style="font-size:11px;color:#64748d;">失败</div>
+          <div style="font-size:22px;font-weight:700;color:#ea2261;">23</div>
+        </div>
+        <div style="border-radius:8px;padding:16px;background:#fff;box-shadow:rgba(50,50,93,0.25) 0px 2px 5px -1px, rgba(0,0,0,0.1) 0px 1px 3px -1px;">
+          <div style="font-size:11px;color:#64748d;">分类</div>
+          <div style="font-size:22px;font-weight:700;color:#061b31;">12</div>
+        </div>
+      </div>
+      <div style="height:40px;background:#f8f9fc;border-radius:4px;display:flex;align-items:flex-end;padding:0 4px;gap:2px;">
+        <div style="flex:1;height:60%;background:#533afd;border-radius:2px 2px 0 0"></div>
+        <div style="flex:1;height:80%;background:#533afd;border-radius:2px 2px 0 0"></div>
+        <div style="flex:1;height:45%;background:#533afd;border-radius:2px 2px 0 0"></div>
+        <div style="flex:1;height:90%;background:#533afd;border-radius:2px 2px 0 0"></div>
+        <div style="flex:1;height:70%;background:#533afd;border-radius:2px 2px 0 0"></div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>方案 C：Stripe 企业风</h3>
+      <p>深海军蓝 + 签名紫色 + 多层蓝色阴影。专业高端感，金融级品质。适合企业级数据管理平台。</p>
+      <div class="label">参考：Stripe Dashboard</div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <p class="subtitle">打开 http://localhost:61445 查看效果，点击选择你偏好的方向，然后告诉我你的想法。</p>
+</div>

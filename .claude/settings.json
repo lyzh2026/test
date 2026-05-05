@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker-compose restart *)",
+      "Bash(docker-compose build *)",
+      "Bash(docker-compose up *)",
+      "Bash(docker-compose logs *)",
+      "Bash(\"C:\\\\Program Files\\\\Docker\\\\Docker\\\\Docker Desktop.exe\")",
+      "Bash(docker info *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Read(//d/移动/shixun/**)",
+      "Read(//d/移动/**)",
+      "Read(//d//**)"
+    ]
+  }
+}
