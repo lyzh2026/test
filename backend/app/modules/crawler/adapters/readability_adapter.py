@@ -109,10 +109,15 @@ def _guess_source_unit(html: str) -> Optional[str]:
 _DATE_KEYWORDS = {
     "今天", "昨天", "明天", "前天", "后天",
     "日前", "近日", "同年", "当月", "去年", "今年", "明年",
-    "报道", "讯", "电", "发布时间", "更新于", "发布日期",
+    "报道", "发布时间", "更新于", "发布日期",
 }
 
 _DATE_CHAR_PATTERN = re.compile(r"\d+[年月]|[昨今明前当去今明]日|\d+日|月\d+")
+
+# 发布日期专用关键词（更严格）
+_PUBLISH_DATE_KEYWORDS = {"发布时间", "发布日期", "更新于", "发布于", "发表于", "撰稿"}
+# 近期日期模式（2024-2026年，要求有日/号部分，用于区分历史日期和发布日期）
+_RECENT_DATE_PATTERN = re.compile(r"20(?:2[4-6])年(?:[1-9]|1[0-2])月(?:[1-9]|[12]\d|3[01])[日号]?|20(?:2[4-6])-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])")
 
 
 def _has_date_hints(text: str) -> bool:
@@ -121,6 +126,23 @@ def _has_date_hints(text: str) -> bool:
         if kw in text:
             return True
     if _DATE_CHAR_PATTERN.search(text):
+        return True
+    return False
+
+
+def _has_publish_date_hints(text: str) -> bool:
+    """检测文本中是否包含发布日期线索（用于区分静态页和文章页）。
+
+    比 _has_date_hints 更严格：
+    1. 检查发布日期专用关键词
+    2. 检查近期日期（2024-2026年）
+    """
+    # 检查发布日期关键词
+    for kw in _PUBLISH_DATE_KEYWORDS:
+        if kw in text:
+            return True
+    # 检查近期日期
+    if _RECENT_DATE_PATTERN.search(text):
         return True
     return False
 

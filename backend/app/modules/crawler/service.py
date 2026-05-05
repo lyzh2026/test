@@ -20,7 +20,7 @@ from app.models.article import Article
 from app.models.crawler_task import CrawlerTask
 from app.modules.crawler.adapters.base import RenderedPage, SpiderAdapter
 from app.modules.crawler.adapters.llm_extraction_adapter import LLMExtractionAdapter
-from app.modules.crawler.adapters.readability_adapter import ReadabilityAdapter
+from app.modules.crawler.adapters.readability_adapter import ReadabilityAdapter, _has_date_hints, _has_publish_date_hints, _html_to_plaintext
 from app.modules.crawler.pagination import find_article_next_page
 from app.modules.crawler.progress_bus import ProgressEvent, progress_bus
 from app.modules.crawler.rate_limiter import domain_rate_limiter
@@ -492,6 +492,10 @@ async def _crawl_one_attempt(task_id: str, url: str, *, target_date: date, date_
     draft = None
     last_reason = "ALL_ADAPTERS_FAILED"
     for adapter in _ADAPTERS:
+        # Readability 失败且页面无日期线索 → 跳过 LLM（避免静态页浪费 API 调用）
+        if adapter.name == "llm_extraction" and not _has_publish_date_hints(_html_to_plaintext(page.html)[:5000]):
+            last_reason = "llm_skipped_no_date_hints"
+            break
         try:
             d = await adapter.extract(page)
             if adapter.validate(d):
@@ -503,7 +507,6 @@ async def _crawl_one_attempt(task_id: str, url: str, *, target_date: date, date_
             logger.warning("adapter %s failed for %s: %r", adapter.name, url, e)
             last_reason = f"{adapter.name}: {e!r}"
     if not draft:
-        # non-article pages (index/list) — expected, count as filtered not failed
         return {"ok": True, "filtered": True, "code": 2002, "reason": last_reason, "stage": "extract"}
 
     # 日期过滤：页面有明确日期且在时间段外时跳过
