@@ -1,0 +1,88 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: shixun-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: shixun-postgres
+    environment:
+      POSTGRES_DB: shixun
+      POSTGRES_USER: shixun
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-shixun_db_pwd_change_me}
+      TZ: ${TZ:-Asia/Shanghai}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shixun -d shixun"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  fastapi:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: shixun-backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://shixun:${POSTGRES_PASSWORD:-shixun_db_pwd_change_me}@postgres:5432/shixun
+      DATABASE_URL_SYNC: postgresql+psycopg2://shixun:${POSTGRES_PASSWORD:-shixun_db_pwd_change_me}@postgres:5432/shixun
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
+      SESSION_SECRET: ${SESSION_SECRET:-please_replace_with_random_64_char_string}
+      MOONSHOT_API_KEY: ${MOONSHOT_API_KEY:-}
+      MOONSHOT_BASE_URL: ${MOONSHOT_BASE_URL:-https://api.moonshot.cn/v1}
+      MOONSHOT_MODEL: ${MOONSHOT_MODEL:-moonshot-v1-32k}
+      ALLOWED_DOMAINS: ${ALLOWED_DOMAINS:-}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      #TZ: ${TZ:-Asia/Shanghai}
+    ports:
+      - "0.0.0.0:8000:8000"
+    volumes:
+      - ./static:/app/static
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+
+  nextjs:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # 确保构建时能读取到这个地址
+        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    container_name: shixun-frontend
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - API_BASE_URL=http://fastapi:8000
+      # 新增浏览器访问地址
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      - NEXT_PUBLIC_APP_NAME=拾讯
+      #- TZ=${TZ:-Asia/Shanghai}
+    ports:
+      - "0.0.0.0:3000:3000"
+    depends_on:
+      - fastapi
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
