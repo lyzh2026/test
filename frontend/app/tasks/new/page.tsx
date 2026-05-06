@@ -1,8 +1,9 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { api, ApiError } from '@/lib/api';
 import { todayISO } from '@/lib/utils';
+import { useToast } from '@/components/ui/Toast';
 
 type LinkItem = { url: string; score: number };
 type ScanResp = { entry_url: string; links: LinkItem[]; count: number };
@@ -11,6 +12,29 @@ type CreateResp = {
   status: string;
   total_urls: number;
   failed_urls: number;
+};
+
+type DistConfig = { id: string; channel_type: string; name: string; enabled: boolean };
+
+const WEEKDAY_OPTIONS = [
+  { value: 1, label: '周一' },
+  { value: 2, label: '周二' },
+  { value: 3, label: '周三' },
+  { value: 4, label: '周四' },
+  { value: 5, label: '周五' },
+  { value: 6, label: '周六' },
+  { value: 0, label: '周日' },
+];
+
+type PastTask = {
+  id: string;
+  task_name: string | null;
+  target_date: string;
+  date_to: string | null;
+  url_list: string[];
+  direct_urls?: string[];
+  total_urls: number;
+  status: string;
 };
 
 export default function NewTaskPage() {
@@ -28,6 +52,24 @@ export default function NewTaskPage() {
   const [links, setLinks] = useState<LinkItem[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [previewDone, setPreviewDone] = useState(false);
+
+  // Past tasks history
+  const [pastTasks, setPastTasks] = useState<PastTask[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
+
+  useEffect(() => {
+    api.get<{ items: PastTask[] }>('/api/v1/crawler/tasks?limit=20&offset=0')
+      .then(data => setPastTasks(data.items.filter(t => t.task_name)))
+      .catch(() => {});
+  }, []);
+
+  function selectPastTask(t: PastTask) {
+    setTaskName(t.task_name || '');
+    setDateFrom(t.target_date);
+    setDateTo(t.date_to || t.target_date);
+    if (t.url_list?.length) setEntryUrlText(t.url_list.join('\n'));
+    setShowHistory(false);
+  }
 
   async function onPreview() {
     setError(null);
@@ -110,20 +152,56 @@ export default function NewTaskPage() {
 
   return (
     <main className="min-h-screen p-8 animate-fade-in">
+      <div className="max-w-3xl mx-auto">
       <div className="mb-8">
         <h1 className="text-2xl font-semibold" style={{ color: '#18181b' }}>新建采集任务</h1>
         <p className="mt-1.5 text-sm" style={{ color: '#9ca3af' }}>配置入口 URL 与采集参数</p>
       </div>
 
-      <form className="card p-6 space-y-6 max-w-3xl">
-        <div>
+      <form className="card p-6 space-y-6">
+        <div className="relative">
           <label className="mb-1.5 block text-sm" style={{ color: '#6b7280' }}>任务名称（可选）</label>
-          <input
-            className="input"
-            value={taskName}
-            onChange={(e) => setTaskName(e.target.value)}
-            placeholder="如：政务公告每日采集"
-          />
+          <div className="relative">
+            <input
+              className="input pr-8"
+              value={taskName}
+              onChange={(e) => setTaskName(e.target.value)}
+              onFocus={() => setShowHistory(true)}
+              onBlur={() => setTimeout(() => setShowHistory(false), 200)}
+              placeholder="如：政务公告每日采集"
+            />
+            {pastTasks.length > 0 && (
+              <button
+                type="button"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-base px-1"
+                style={{ color: '#9ca3af' }}
+                onClick={() => setShowHistory(!showHistory)}
+              >
+                ▾
+              </button>
+            )}
+          </div>
+          {showHistory && pastTasks.length > 0 && (
+            <div
+              className="absolute z-10 mt-1 w-full max-h-48 overflow-y-auto rounded-lg shadow-lg"
+              style={{ background: '#fff', border: '1px solid #e5e7eb' }}
+            >
+              {pastTasks.map(t => (
+                <button
+                  key={t.id}
+                  type="button"
+                  className="w-full text-left px-3 py-2 text-sm transition-colors hover:bg-gray-50"
+                  style={{ color: '#18181b' }}
+                  onMouseDown={(e) => { e.preventDefault(); selectPastTask(t); }}
+                >
+                  <span className="font-medium">{t.task_name}</span>
+                  <span className="ml-2 text-xs" style={{ color: '#9ca3af' }}>
+                    {t.target_date}{t.date_to ? ` ~ ${t.date_to}` : ''} · {t.total_urls} 条
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="grid grid-cols-3 gap-4">
@@ -205,6 +283,9 @@ export default function NewTaskPage() {
           <button type="button" onClick={() => router.push('/tasks')} className="btn-secondary">
             取消
           </button>
+          <button type="button" onClick={() => router.push('/tasks')} className="btn-secondary">
+            查看任务列表
+          </button>
         </div>
       </form>
 
@@ -261,6 +342,155 @@ export default function NewTaskPage() {
           )}
         </section>
       )}
+
+      {/* 定时任务创建 */}
+      <section className="mt-8">
+        <ScheduledTaskForm />
+      </section>
+      </div>
     </main>
+  );
+}
+
+function ScheduledTaskForm() {
+  const [formName, setFormName] = useState('');
+  const [formUrls, setFormUrls] = useState('');
+  const [formWeekdays, setFormWeekdays] = useState<number[]>([1, 3, 5]);
+  const [formConfigId, setFormConfigId] = useState('');
+  const [formEnabled, setFormEnabled] = useState(true);
+  const [emailConfigs, setEmailConfigs] = useState<DistConfig[]>([]);
+  const [saving, setSaving] = useState(false);
+  const { toast } = useToast();
+  const router = useRouter();
+
+  // 定时任务历史
+  const [pastScheduled, setPastScheduled] = useState<{ id: string; name: string; url_list: string[]; weekdays: number[]; email_config_id: string; enabled: boolean }[]>([]);
+  const [showScheduledHistory, setShowScheduledHistory] = useState(false);
+
+  const fetchEmailConfigs = useCallback(async () => {
+    try {
+      const data = await api.get<{ items: DistConfig[] }>('/api/v1/distribution/configs');
+      setEmailConfigs(data.items.filter(c => c.channel_type === 'email' && c.enabled));
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => {
+    fetchEmailConfigs();
+    api.get<{ items: { id: string; name: string; url_list: string[]; weekdays: number[]; email_config_id: string; enabled: boolean }[] }>('/api/v1/crawler/scheduled-crawls')
+      .then(data => setPastScheduled(data.items))
+      .catch(() => {});
+  }, [fetchEmailConfigs]);
+
+  function selectPastScheduled(t: { name: string; url_list: string[]; weekdays: number[]; email_config_id: string; enabled: boolean }) {
+    setFormName(t.name);
+    setFormUrls(t.url_list.join('\n'));
+    setFormWeekdays(t.weekdays);
+    setFormConfigId(t.email_config_id);
+    setFormEnabled(t.enabled);
+    setShowScheduledHistory(false);
+  }
+
+  function toggleWeekday(day: number) {
+    setFormWeekdays(prev => prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day].sort());
+  }
+
+  async function handleSave() {
+    if (!formName.trim()) { toast('请输入任务名称', 'error'); return; }
+    const urls = formUrls.split('\n').map(s => s.trim()).filter(Boolean);
+    if (urls.length === 0) { toast('请输入至少一个 URL', 'error'); return; }
+    if (formWeekdays.length === 0) { toast('请选择至少一个执行日', 'error'); return; }
+    if (!formConfigId) { toast('请选择邮件通道', 'error'); return; }
+    setSaving(true);
+    try {
+      await api.post('/api/v1/crawler/scheduled-crawls', {
+        name: formName.trim(),
+        url_list: urls,
+        weekdays: formWeekdays,
+        email_config_id: formConfigId,
+        enabled: formEnabled,
+      });
+      toast('定时任务创建成功', 'success');
+      setFormName(''); setFormUrls(''); setFormWeekdays([1, 3, 5]); setFormConfigId(''); setFormEnabled(true);
+    } catch (e: unknown) {
+      toast(e instanceof ApiError ? e.message : '创建失败', 'error');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="card p-6">
+      <div className="flex items-center justify-between mb-5">
+        <div>
+          <h2 className="text-base font-medium" style={{ color: '#18181b' }}>新建定时任务</h2>
+          <p className="mt-1 text-xs" style={{ color: '#9ca3af' }}>定时从固定网站爬取文章并自动邮件推送</p>
+        </div>
+      </div>
+
+      <div className="space-y-4">
+        <div className="relative">
+          <label className="block text-xs mb-1" style={{ color: '#9ca3af' }}>任务名称</label>
+          <div className="relative">
+            <input value={formName} onChange={e => setFormName(e.target.value)} onFocus={() => setShowScheduledHistory(true)} onBlur={() => setTimeout(() => setShowScheduledHistory(false), 200)} className="input pr-8" placeholder="如：每日政策爬取" />
+            {pastScheduled.length > 0 && (
+              <button type="button" className="absolute right-2 top-1/2 -translate-y-1/2 text-base px-1" style={{ color: '#9ca3af' }} onClick={() => setShowScheduledHistory(!showScheduledHistory)}>▾</button>
+            )}
+          </div>
+          {showScheduledHistory && pastScheduled.length > 0 && (
+            <div className="absolute z-10 mt-1 w-full max-h-48 overflow-y-auto rounded-lg shadow-lg" style={{ background: '#fff', border: '1px solid #e5e7eb' }}>
+              {pastScheduled.map(t => (
+                <button key={t.id} type="button" className="w-full text-left px-3 py-2 text-sm transition-colors hover:bg-gray-50" style={{ color: '#18181b' }} onMouseDown={(e) => { e.preventDefault(); selectPastScheduled(t); }}>
+                  <span className="font-medium">{t.name}</span>
+                  <span className="ml-2 text-xs" style={{ color: '#9ca3af' }}>{t.url_list.length} 条 URL</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <div>
+          <label className="block text-xs mb-1" style={{ color: '#9ca3af' }}>URL 列表（每行一个）</label>
+          <textarea value={formUrls} onChange={e => setFormUrls(e.target.value)} className="input" rows={4}
+            placeholder={"https://example.gov.cn/news\nhttps://another.gov.cn/policy"} style={{ resize: 'vertical' }} />
+        </div>
+        <div>
+          <label className="block text-xs mb-1" style={{ color: '#9ca3af' }}>执行日</label>
+          <div className="flex flex-wrap gap-2">
+            {WEEKDAY_OPTIONS.map(opt => (
+              <button key={opt.value} type="button" onClick={() => toggleWeekday(opt.value)}
+                className="px-3 py-1 rounded-full text-xs font-medium transition-colors"
+                style={{ background: formWeekdays.includes(opt.value) ? '#3b82f6' : '#f3f4f6', color: formWeekdays.includes(opt.value) ? '#fff' : '#6b7280' }}>
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <label className="block text-xs mb-1" style={{ color: '#9ca3af' }}>邮件通道</label>
+          <select value={formConfigId} onChange={e => setFormConfigId(e.target.value)} className="input">
+            <option value="">请选择</option>
+            {emailConfigs.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          {emailConfigs.length === 0 && (
+            <p className="mt-1 text-xs" style={{ color: '#ef4444' }}>
+              暂无可用邮件通道，请先在设置页分发配置中添加
+            </p>
+          )}
+        </div>
+        <label className="flex items-center gap-2 text-sm cursor-pointer" style={{ color: '#6b7280' }}>
+          <input type="checkbox" checked={formEnabled} onChange={e => setFormEnabled(e.target.checked)}
+            className="h-4 w-4 rounded" style={{ accentColor: '#3b82f6' }} />
+          启用
+        </label>
+      </div>
+
+      <div className="mt-5 flex items-center gap-3">
+        <button onClick={handleSave} disabled={saving} className="btn-primary">
+          {saving ? '创建中…' : '创建定时任务'}
+        </button>
+        <button onClick={() => router.push('/tasks')} className="btn-secondary text-xs">
+          查看任务列表
+        </button>
+      </div>
+    </div>
   );
 }

@@ -354,15 +354,15 @@ async def run_crawl_job(task_id: str, urls: list[str]):
             t = await session.get(CrawlerTask, task_id)
             if not t:
                 return
-            details: list = list(t.failed_details or [])
+            new_failed: list = []
             for url, res in zip(urls, results):
                 if isinstance(res, (Exception, BaseException)):
-                    details.append({"url": url, "code": 5001, "reason": f"内部异常：{res!r}", "stage": "render"})
+                    new_failed.append({"url": url, "code": 5001, "reason": f"内部异常：{res!r}", "stage": "render"})
                 elif isinstance(res, dict) and not res.get("ok") and not res.get("dedup") and not res.get("filtered"):
-                    details.append({"url": url, "code": res.get("code", 2001), "reason": res.get("reason", "未知错误"), "stage": res.get("stage", "")})
+                    new_failed.append({"url": url, "code": res.get("code", 2001), "reason": res.get("reason", "未知错误"), "stage": res.get("stage", "")})
             t.completed_urls = completed
-            t.failed_urls = len(details)
-            t.failed_details = details
+            t.failed_urls = failed
+            t.failed_details = list(t.failed_details or []) + new_failed
             t.completed_at = datetime.now(timezone.utc)
             if task_id in _cancelled_tasks:
                 t.status = "cancelled"

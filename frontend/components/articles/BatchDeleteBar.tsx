@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api, ApiError } from '@/lib/api';
+import { downloadWithPicker } from '@/lib/download';
 import { EmailSendButton } from '@/components/articles/EmailSendButton';
 import { ExportDocButton, batchExportDoc } from '@/components/articles/ExportDocButton';
 
@@ -83,24 +84,13 @@ export function ArticleListClient({ items, total, limit, offset, prevHref, nextH
   async function handleMergedExport(useTemplate: boolean) {
     setExporting(true);
     try {
-      const res = await fetch('/api/proxy/api/v1/articles/export/merged-doc', {
+      const filename = `拾讯文章合集_${new Date().toISOString().split('T')[0]}.docx`;
+      await downloadWithPicker('/api/proxy/api/v1/articles/export/merged-doc', filename, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({ article_ids: Array.from(selected), use_template: useTemplate }),
       });
-      if (!res.ok) {
-        throw new Error('导出失败');
-      }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `拾讯文章合集_${new Date().toISOString().split('T')[0]}.docx`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
     } catch {
       // ignore
     } finally {

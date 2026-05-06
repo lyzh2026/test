@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { api, ApiError } from '@/lib/api';
 import { useToast } from '@/components/ui/Toast';
+import { DistributionPanel } from '@/components/admin/DistributionPanel';
 
 type AiConfig = {
   provider: string;
@@ -59,6 +60,8 @@ type TemplateStatus = {
       setModel(data.model || '');
     } catch {
       // ignore
+    } finally {
+      setLoading(false);
     }
   }, []);
 
@@ -206,13 +209,14 @@ type TemplateStatus = {
 
   return (
     <main className="min-h-screen p-8 animate-fade-in">
+      <div className="max-w-4xl mx-auto">
       <div className="mb-8">
         <h1 className="text-2xl font-semibold" style={{ color: '#18181b' }}>系统设置</h1>
-        <p className="mt-1.5 text-sm" style={{ color: '#9ca3af' }}>管理 AI 模型等系统配置</p>
+        <p className="mt-1.5 text-sm" style={{ color: '#9ca3af' }}>管理 AI 模型、分发配置等系统设置</p>
       </div>
 
       {/* AI 模型配置 */}
-      <div className="card p-6" style={{ maxWidth: 640 }}>
+      <div className="card p-6">
         <h2 className="text-base font-medium mb-5" style={{ color: '#18181b' }}>AI 模型配置</h2>
 
         {/* 预设按钮 */}
@@ -299,7 +303,7 @@ type TemplateStatus = {
       </div>
 
       {/* 导出模板配置 */}
-      <div className="card p-6 mt-6" style={{ maxWidth: 640 }}>
+      <div className="card p-6 mt-6">
         <h2 className="text-base font-medium mb-5" style={{ color: '#18181b' }}>导出模板</h2>
         <p className="text-xs mb-4" style={{ color: '#9ca3af' }}>
           上传 Word 模板用于合并导出。模板中可使用 Jinja2 占位符（{'{{'} article.title {'}}'} 等）。
@@ -354,7 +358,7 @@ type TemplateStatus = {
       </div>
 
       {/* 分类标签配置 */}
-      <div className="card p-6 mt-6" style={{ maxWidth: 640 }}>
+      <div className="card p-6 mt-6">
         <h2 className="text-base font-medium mb-5" style={{ color: '#18181b' }}>分类标签</h2>
         <p className="text-xs mb-4" style={{ color: '#9ca3af' }}>
           AI 文章分类使用的标签列表，修改后对新分析的文章生效。
@@ -401,6 +405,12 @@ type TemplateStatus = {
         >
           {savingCategories ? '保存中…' : '保存标签'}
         </button>
+      </div>
+
+      {/* 分发配置 */}
+      <div className="mt-6">
+        <DistributionPanel />
+      </div>
       </div>
     </main>
   );

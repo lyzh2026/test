@@ -43,10 +43,10 @@ function ProgressBar({ completed, total, failed }: { completed: number; total: n
   const failedPct = Math.round((failed / total) * 100);
   return (
     <div className="flex items-center gap-2">
-      <div className="h-1.5 w-20 overflow-hidden rounded-full" style={{ background: '#f3f4f6' }}>
-        <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: '#22c55e' }} />
+      <div className="flex h-1.5 w-20 overflow-hidden rounded-full" style={{ background: '#f3f4f6' }}>
+        <div className="h-full transition-all" style={{ width: `${pct}%`, background: '#22c55e' }} />
         {failedPct > 0 && (
-          <div className="h-full rounded-full -mt-1.5" style={{ width: `${pct + failedPct}%`, background: '#ef4444', opacity: 0.6 }} />
+          <div className="h-full" style={{ width: `${failedPct}%`, background: '#ef4444' }} />
         )}
       </div>
       <span className="text-xs" style={{ color: '#6b7280' }}>{completed}/{total}</span>
@@ -176,13 +176,24 @@ export function TaskTable({ items, onRefresh }: { items: Task[]; onRefresh?: () 
               </td>
               <td className="px-4 py-3 text-xs" style={{ color: '#9ca3af' }}>{formatDate(t.created_at)}</td>
               <td className="px-4 py-3">
-                <Link
-                  href={`/articles?task_id=${t.id}`}
-                  className="text-xs transition-colors"
-                  style={{ color: '#3b82f6' }}
-                >
-                  查看文章
-                </Link>
+                <div className="flex items-center gap-3">
+                  <Link
+                    href={`/articles?task_id=${t.id}`}
+                    className="text-xs transition-colors"
+                    style={{ color: '#3b82f6' }}
+                  >
+                    查看文章
+                  </Link>
+                  {t.failed_urls > 0 && (
+                    <Link
+                      href={`/tasks/${t.id}`}
+                      className="text-xs transition-colors"
+                      style={{ color: '#ef4444' }}
+                    >
+                      失败原因
+                    </Link>
+                  )}
+                </div>
               </td>
             </tr>
           ))}

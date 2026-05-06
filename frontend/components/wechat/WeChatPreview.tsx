@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
+import { downloadWithPicker } from '@/lib/download';
 
 type TemplateInfo = { key: string; label: string };
 
@@ -118,13 +119,12 @@ export default function WeChatPreview({
         <button onClick={handleCopy} className="btn-primary">
           {copied ? '已复制' : '复制 HTML'}
         </button>
-        <a
-          href={`/api/proxy/api/v1/wechat/export/html/${articleId}?template=${selectedTemplate}`}
-          download
+        <button
+          onClick={() => downloadWithPicker(`/api/proxy/api/v1/wechat/export/html/${articleId}?template=${selectedTemplate}`, `推文_${articleId.slice(0, 8)}.html`)}
           className="btn-secondary"
         >
           下载 HTML
-        </a>
+        </button>
       </div>
     </div>
   );

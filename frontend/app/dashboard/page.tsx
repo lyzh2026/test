@@ -5,6 +5,8 @@ type StatsResp = { daily: DailyItem[]; from: string; to: string };
 type CategoryItem = { label: string; count: number };
 type SourceItem = { source: string; count: number };
 
+const PIE_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316'];
+
 export default async function DashboardPage() {
   let stats: StatsResp | null = null;
   let categories: CategoryItem[] = [];
@@ -17,8 +19,8 @@ export default async function DashboardPage() {
       serverFetch<{ items: SourceItem[] }>('/api/v1/stats/sources'),
     ]);
     stats = s;
-    categories = c.items || [];
-    sources = sr.items || [];
+    categories = c?.items || [];
+    sources = sr?.items || [];
   } catch (e) {
     errorMsg = (e as Error).message;
   }
@@ -31,6 +33,7 @@ export default async function DashboardPage() {
 
   const maxCategory = Math.max(1, ...categories.map((c) => c.count));
   const maxSource = Math.max(1, ...sources.map((s) => s.count));
+  const categoryTotal = categories.reduce((s, c) => s + c.count, 0);
 
   return (
     <main className="min-h-screen p-8 animate-fade-in">
@@ -62,12 +65,12 @@ export default async function DashboardPage() {
           ) : (
             <div className="flex h-56 items-end gap-1.5">
               {daily.map((d) => {
-                const h = Math.round((d.total / max) * 100);
+                const h = max > 0 ? Math.round((d.total / max) * 100) : 0;
                 return (
                   <div key={d.date} className="flex flex-1 flex-col items-center justify-end group" title={`${d.date} : ${d.total}`}>
                     <div
                       className="w-full rounded-t transition-all duration-200 group-hover:opacity-80 bg-blue-500"
-                      style={{ height: `${Math.max(4, h)}%`, borderRadius: '2px 2px 0 0' }}
+                      style={{ height: `${Math.max(d.total > 0 ? 4 : 1, h)}%`, borderRadius: '2px 2px 0 0' }}
                     />
                     <span className="mt-1.5 text-[10px] text-gray-400">{d.date.slice(5)}</span>
                   </div>
@@ -82,19 +85,51 @@ export default async function DashboardPage() {
           {categories.length === 0 ? (
             <p className="text-sm text-gray-400">暂无数据</p>
           ) : (
-            <div className="space-y-3">
-              {categories.map((c) => {
-                const w = Math.round((c.count / maxCategory) * 100);
-                return (
-                  <div key={c.label} className="flex items-center gap-3 text-sm">
-                    <span className="w-16 flex-shrink-0 text-right text-gray-500">{c.label}</span>
-                    <div className="flex-1 rounded-full overflow-hidden bg-gray-100" style={{ height: '6px' }}>
-                      <div className="h-full rounded-full transition-all duration-300 bg-blue-500" style={{ width: `${Math.max(4, w)}%` }} />
-                    </div>
-                    <span className="w-8 flex-shrink-0 text-right text-xs text-gray-400">{c.count}</span>
+            <div className="flex items-center gap-6">
+              {/* Pie Chart */}
+              <div className="relative flex-shrink-0" style={{ width: 140, height: 140 }}>
+                <svg viewBox="0 0 100 100" className="w-full h-full -rotate-90">
+                  {(() => {
+                    let offset = 0;
+                    return categories.map((c, i) => {
+                      const pct = categoryTotal > 0 ? c.count / categoryTotal : 0;
+                      const dashArray = `${pct * 100} ${100 - pct * 100}`;
+                      const el = (
+                        <circle
+                          key={c.label}
+                          cx="50"
+                          cy="50"
+                          r="40"
+                          fill="none"
+                          stroke={PIE_COLORS[i % PIE_COLORS.length]}
+                          strokeWidth="20"
+                          strokeDasharray={dashArray}
+                          strokeDashoffset={-offset}
+                        />
+                      );
+                      offset += pct * 100;
+                      return el;
+                    });
+                  })()}
+                </svg>
+                <div className="absolute inset-0 flex flex-col items-center justify-center">
+                  <span className="text-lg font-semibold text-gray-900">{categoryTotal}</span>
+                  <span className="text-[10px] text-gray-400">总计</span>
+                </div>
+              </div>
+              {/* Legend */}
+              <div className="flex-1 space-y-2">
+                {categories.map((c, i) => (
+                  <div key={c.label} className="flex items-center gap-2 text-sm">
+                    <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: PIE_COLORS[i % PIE_COLORS.length] }} />
+                    <span className="flex-1 truncate text-gray-600">{c.label}</span>
+                    <span className="text-xs text-gray-400">{c.count}</span>
+                    <span className="text-xs text-gray-300 w-10 text-right">
+                      {categoryTotal > 0 ? Math.round((c.count / categoryTotal) * 100) : 0}%
+                    </span>
                   </div>
-                );
-              })}
+                ))}
+              </div>
             </div>
           )}
         </section>

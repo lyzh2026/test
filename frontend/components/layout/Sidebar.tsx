@@ -5,13 +5,13 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useState, useEffect } from 'react';
 
 const NAV_MAIN = [
+  { href: '/tasks/new', label: '智能采集岛', icon: '✦' },
+  { href: '/articles', label: '数据库', icon: '⊞' },
   { href: '/dashboard', label: '看板', icon: '◈' },
-  { href: '/articles', label: '文章', icon: '⊞' },
-  { href: '/tasks', label: '任务', icon: '◉' },
+  { href: '/tasks', label: '任务列表', icon: '◉' },
 ];
 
 const NAV_SECONDARY = [
-  { href: '/admin/distribution', label: '分发配置', icon: '⇶' },
   { href: '/admin/settings', label: '设置', icon: '⚙' },
 ];
 
@@ -45,6 +45,8 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle:
 
   function isActive(href: string) {
     if (href === '/dashboard') return path === href;
+    if (href === '/tasks') return path === '/tasks' || (path?.startsWith('/tasks/') && !path.startsWith('/tasks/new'));
+    if (href === '/tasks/new') return path === '/tasks/new';
     return path?.startsWith(href);
   }
 

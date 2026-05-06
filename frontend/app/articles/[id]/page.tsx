@@ -6,6 +6,7 @@ import { ReanalyzeButton } from '@/components/articles/ReanalyzeButton';
 import { DeleteArticleButton } from '@/components/articles/DeleteArticleButton';
 import { EmailSendButton } from '@/components/articles/EmailSendButton';
 import { ExportDocButton } from '@/components/articles/ExportDocButton';
+import { DownloadLink } from '@/components/ui/DownloadLink';
 import { serverFetch, ServerApiError } from '@/lib/server-fetch';
 import { formatDate } from '@/lib/utils';
 
@@ -112,12 +113,20 @@ export default async function ArticleDetailPage({ params }: { params: { id: stri
           <Link href={`/articles/${article.id}/wechat`} className="btn-primary">
             微信推文 →
           </Link>
-          <a href={`/api/proxy/api/v1/wechat/export/markdown/${article.id}`} className="btn-secondary">
+          <DownloadLink
+            href={`/api/proxy/api/v1/wechat/export/markdown/${article.id}`}
+            filename={`${article.original_title || '文章'}.md`}
+            className="btn-secondary"
+          >
             下载 Markdown
-          </a>
-          <a href={`/api/proxy/api/v1/wechat/export/html/${article.id}`} className="btn-secondary">
+          </DownloadLink>
+          <DownloadLink
+            href={`/api/proxy/api/v1/wechat/export/html/${article.id}`}
+            filename={`${article.original_title || '文章'}.html`}
+            className="btn-secondary"
+          >
             下载 HTML
-          </a>
+          </DownloadLink>
           <span className="ml-auto"><DeleteArticleButton articleId={article.id} /></span>
         </div>
 
