@@ -23,12 +23,16 @@ type ArticleItem = {
 
 type ArticleListResp = { items: ArticleItem[]; total: number; limit: number; offset: number };
 
-const CATEGORIES = [
-  '政策法规', '经济金融', '科技创新', '民生社保', '教育文化',
-  '医疗卫生', '环境生态', '国际外交', '国防军事', '农业农村', '工业贸易', '未分类',
-];
-
 export const dynamic = 'force-dynamic';
+
+async function fetchCategories(): Promise<string[]> {
+  try {
+    const data = await serverFetch<{ labels: string[] }>('/api/v1/articles/category-labels');
+    return data.labels || [];
+  } catch {
+    return [];
+  }
+}
 
 export default async function ArticlesPage({
   searchParams,
@@ -57,6 +61,7 @@ export default async function ArticlesPage({
   }
   const items = resp?.items || [];
   const total = resp?.total || 0;
+  const categories = await fetchCategories();
 
   const mkUrl = (off: number) => {
     const p = new URLSearchParams(params);
@@ -87,7 +92,7 @@ export default async function ArticlesPage({
           <Field label="分类">
             <select name="category" defaultValue={searchParams.category || ''} className="input w-32">
               <option value="">全部</option>
-              {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+              {categories.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
           </Field>
           <Field label="关键词">

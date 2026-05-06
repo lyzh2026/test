@@ -259,3 +259,81 @@ async def delete_export_template(
     if os.path.isfile(TEMPLATE_PATH):
         os.remove(TEMPLATE_PATH)
     return success({"ok": True}, request=request)
+
+
+# ── 分类标签配置 ──────────────────────────────────────────────
+
+DEFAULT_CATEGORY_LABELS = [
+    "最新政策",
+    "数字经济",
+    "人工智能",
+    "数据要素",
+    "通信",
+    "申报",
+    "潜在商机",
+    "具身智能",
+    "车路云协同",
+    "新型工业化",
+    "算力",
+]
+
+
+@router.get("/settings/category-labels")
+async def get_category_labels(
+    request: Request,
+    _: object = Depends(current_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """获取当前分类标签配置。"""
+    result = await session.execute(
+        select(SystemConfig).where(SystemConfig.key == "category_labels")
+    )
+    cfg = result.scalar_one_or_none()
+    if cfg and cfg.value and isinstance(cfg.value, list):
+        return success({"labels": cfg.value}, request=request)
+    return success({"labels": DEFAULT_CATEGORY_LABELS}, request=request)
+
+
+@router.put("/settings/category-labels")
+async def update_category_labels(
+    request: Request,
+    _: object = Depends(current_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """更新分类标签配置（至少保留 1 个，最多 20 个）。"""
+    try:
+        payload = await request.json()
+    except Exception:
+        return error(1001, "请求体必须是 JSON", http_status=400, request=request)
+    labels = payload.get("labels", [])
+    if not isinstance(labels, list):
+        return error(1001, "labels 必须为数组", http_status=400, request=request)
+    if len(labels) < 1:
+        return error(1001, "至少需要 1 个分类标签", http_status=400, request=request)
+    if len(labels) > 20:
+        return error(1001, "分类标签最多 20 个", http_status=400, request=request)
+    for lbl in labels:
+        if not isinstance(lbl, str) or not lbl.strip():
+            return error(1001, "分类标签不能为空字符串", http_status=400, request=request)
+
+    # 去重并清理
+    cleaned = []
+    seen = set()
+    for lbl in labels:
+        s = lbl.strip()
+        if s and s not in seen:
+            seen.add(s)
+            cleaned.append(s)
+
+    result = await session.execute(
+        select(SystemConfig).where(SystemConfig.key == "category_labels")
+    )
+    cfg = result.scalar_one_or_none()
+    if cfg:
+        cfg.value = cleaned
+    else:
+        cfg = SystemConfig(key="category_labels", value=cleaned)
+        session.add(cfg)
+    await session.commit()
+
+    return success({"labels": cleaned}, request=request)

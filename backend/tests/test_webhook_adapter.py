@@ -16,7 +16,7 @@ def sample_report():
         date_range_end=date(2026, 5, 3),
         categories=[
             CategoryGroup(
-                name="政策法规",
+                name="最新政策",
                 articles=[
                     ArticleItem(title="政策A", summary="摘要A", url="https://a.com", publish_date=date(2026, 4, 28), source_unit="来源A"),
                 ],

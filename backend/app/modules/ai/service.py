@@ -14,42 +14,45 @@ from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.models.ai_analysis import AIAnalysis
 from app.models.article import Article
+from app.models.system_config import SystemConfig
 from app.modules.ai.kimi_client import get_llm_client
 
 logger = logging.getLogger(__name__)
 
-# PRD 2.2.5 11 类标签
-CATEGORY_LABELS = [
-    "政策法规",
-    "经济金融",
-    "科技创新",
-    "民生社保",
-    "教育文化",
-    "医疗卫生",
-    "环境生态",
-    "国际外交",
-    "国防军事",
-    "农业农村",
-    "工业贸易",
+_DEFAULT_CATEGORY_LABELS = [
+    "最新政策", "数字经济", "人工智能", "数据要素", "通信",
+    "申报", "潜在商机", "具身智能", "车路云协同", "新型工业化", "算力",
 ]
 
 CATEGORY_THRESHOLD = 0.6
 CATEGORY_TOP_K = 3
 FALLBACK_LABEL = "未分类"
 
-_CLASSIFY_PROMPT = """你是一个新闻/政务文章分类器。给定标题与正文摘录，从以下 11 类中给出每一类的相关度概率（0~1）：
+
+async def get_category_labels(session) -> list[str]:
+    """从 SystemConfig 读取分类标签，无配置时返回默认值。"""
+    from sqlalchemy import select
+    result = await session.execute(
+        select(SystemConfig).where(SystemConfig.key == "category_labels")
+    )
+    cfg = result.scalar_one_or_none()
+    if cfg and cfg.value and isinstance(cfg.value, list):
+        return [str(l).strip() for l in cfg.value if str(l).strip()]
+    return list(_DEFAULT_CATEGORY_LABELS)
+
+_CLASSIFY_PROMPT = """你是一个新闻/政务文章分类器。给定标题与正文摘录，从以下 {count} 类中给出每一类的相关度概率（0~1）：
 
 {labels}
 
 输出严格 JSON：
 {{
-  "scores": {{"政策法规": 0.0, ...}},
+  "scores": {{"{first_label}": 0.0, ...}},
   "keywords": ["关键词1", "关键词2", "关键词3"]
 }}
 
 规则：
 1. 只输出 JSON，不要解释。
-2. scores 必须包含全部 11 个标签；不相关的设较低值。
+2. scores 必须包含全部 {count} 个标签；不相关的设较低值。
 3. keywords 输出 3-5 个最能概括正文的关键词。
 
 文章标题：{title}
@@ -110,9 +113,11 @@ async def _retry_call(coro_factory: Callable, max_retries: int = 3):
                 raise
 
 
-async def _classify(client, model, title: str, content: str) -> tuple[list[dict], list[str]]:
+async def _classify(client, model, title: str, content: str, labels: list[str]) -> tuple[list[dict], list[str]]:
     prompt = _CLASSIFY_PROMPT.format(
-        labels="、".join(CATEGORY_LABELS),
+        count=len(labels),
+        labels="、".join(labels),
+        first_label=labels[0],
         title=_clip(title, 200),
         content=_clip(content, 4000),
     )
@@ -130,7 +135,7 @@ async def _classify(client, model, title: str, content: str) -> tuple[list[dict]
     scores = data.get("scores") or {}
     keywords = data.get("keywords") or []
     items: list[tuple[str, float]] = []
-    for label in CATEGORY_LABELS:
+    for label in labels:
         try:
             v = float(scores.get(label, 0) or 0)
         except (TypeError, ValueError):
@@ -196,8 +201,11 @@ async def analyze_article(article_id: str) -> dict:
                 await session.commit()
         return {"ok": False, "reason": "content_too_short"}
 
+    async with AsyncSessionLocal() as session:
+        labels = await get_category_labels(session)
+
     try:
-        cats, keywords = await _classify(client, model, title, content)
+        cats, keywords = await _classify(client, model, title, content, labels)
         summary = await _summarize(client, model, title, content)
     except Exception as e:
         logger.exception("AI analyze failed for %s", article_id)

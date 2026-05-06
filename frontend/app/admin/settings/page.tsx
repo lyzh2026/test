@@ -44,6 +44,9 @@ type TemplateStatus = {
   const [saved, setSaved] = useState(false);
   const [template, setTemplate] = useState<TemplateStatus | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [categoryLabels, setCategoryLabels] = useState<string[]>([]);
+  const [categoryInput, setCategoryInput] = useState('');
+  const [savingCategories, setSavingCategories] = useState(false);
   const { toast } = useToast();
 
   const fetchConfig = useCallback(async () => {
@@ -68,10 +71,20 @@ type TemplateStatus = {
     }
   }, []);
 
+  const fetchCategoryLabels = useCallback(async () => {
+    try {
+      const data = await api.get<{ labels: string[] }>('/api/v1/admin/settings/category-labels');
+      setCategoryLabels(data.labels || []);
+    } catch {
+      // ignore
+    }
+  }, []);
+
   useEffect(() => {
     fetchConfig();
     fetchTemplate();
-  }, [fetchConfig, fetchTemplate]);
+    fetchCategoryLabels();
+  }, [fetchConfig, fetchTemplate, fetchCategoryLabels]);
 
   function applyPreset(key: string) {
     setProvider(key);
@@ -150,6 +163,37 @@ type TemplateStatus = {
     } catch (err: unknown) {
       toast(err instanceof ApiError ? err.message : '删除失败', 'error');
     }
+  }
+
+  async function handleSaveCategoryLabels() {
+    if (categoryLabels.length === 0) {
+      toast('至少需要保留 1 个分类标签', 'error');
+      return;
+    }
+    setSavingCategories(true);
+    try {
+      await api.put('/api/v1/admin/settings/category-labels', { labels: categoryLabels });
+      toast('分类标签已保存', 'success');
+    } catch (err: unknown) {
+      toast(err instanceof ApiError ? err.message : '保存失败', 'error');
+    } finally {
+      setSavingCategories(false);
+    }
+  }
+
+  function handleAddCategory() {
+    const text = categoryInput.trim();
+    if (!text) return;
+    if (categoryLabels.includes(text)) {
+      toast('该标签已存在', 'error');
+      return;
+    }
+    setCategoryLabels([...categoryLabels, text]);
+    setCategoryInput('');
+  }
+
+  function handleRemoveCategory(index: number) {
+    setCategoryLabels(categoryLabels.filter((_, i) => i !== index));
   }
 
   if (loading) {
@@ -307,6 +351,56 @@ type TemplateStatus = {
             </label>
           </div>
         )}
+      </div>
+
+      {/* 分类标签配置 */}
+      <div className="card p-6 mt-6" style={{ maxWidth: 640 }}>
+        <h2 className="text-base font-medium mb-5" style={{ color: '#18181b' }}>分类标签</h2>
+        <p className="text-xs mb-4" style={{ color: '#9ca3af' }}>
+          AI 文章分类使用的标签列表，修改后对新分析的文章生效。
+        </p>
+
+        <div className="flex flex-wrap gap-2 mb-4">
+          {categoryLabels.map((label, idx) => (
+            <span
+              key={idx}
+              className="inline-flex items-center gap-1 px-3 py-1 text-sm rounded-lg"
+              style={{ background: '#f3f4f6', color: '#374151' }}
+            >
+              {label}
+              <button
+                onClick={() => handleRemoveCategory(idx)}
+                className="text-xs leading-none"
+                style={{ color: '#9ca3af' }}
+                title="删除"
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+
+        <div className="flex items-center gap-2 mb-4">
+          <input
+            type="text"
+            value={categoryInput}
+            onChange={(e) => setCategoryInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleAddCategory(); }}
+            className="input flex-1 text-sm"
+            placeholder="输入新标签，按回车添加"
+          />
+          <button onClick={handleAddCategory} className="btn-secondary text-sm">
+            添加
+          </button>
+        </div>
+
+        <button
+          onClick={handleSaveCategoryLabels}
+          disabled={savingCategories}
+          className="btn-primary text-sm"
+        >
+          {savingCategories ? '保存中…' : '保存标签'}
+        </button>
       </div>
     </main>
   );

@@ -44,9 +44,9 @@ class TestGenerateWeeklyReport:
     async def test_happy_path(self, mock_session):
         """正常生成周报：文章按分类分组，降序排列。"""
         articles = [
-            self._make_article("文章A", "政策法规", 0),
-            self._make_article("文章B", "科技创新", 1),
-            self._make_article("文章C", "政策法规", 2),
+            self._make_article("文章A", "最新政策", 0),
+            self._make_article("文章B", "人工智能", 1),
+            self._make_article("文章C", "最新政策", 2),
         ]
         mock_result = MagicMock()
         mock_result.unique.return_value.scalars.return_value.all.return_value = articles
@@ -59,9 +59,9 @@ class TestGenerateWeeklyReport:
         assert report.year_week == "2026-W18"
         assert report.stats.total_articles == 3
         cat_names = [c.name for c in report.categories]
-        assert "政策法规" in cat_names
+        assert "最新政策" in cat_names
         assert "其他" in cat_names
-        assert "科技创新" not in cat_names
+        assert "人工智能" not in cat_names
 
     @pytest.mark.asyncio
     async def test_empty_week(self, mock_session):
@@ -79,7 +79,7 @@ class TestGenerateWeeklyReport:
     @pytest.mark.asyncio
     async def test_no_ai_analysis(self, mock_session):
         """文章无 AI 分析结果时正确读取。"""
-        article = self._make_article("无分析文章", "政策法规", 0)
+        article = self._make_article("无分析文章", "最新政策", 0)
         article.ai_analysis = None
         mock_result = MagicMock()
         mock_result.unique.return_value.scalars.return_value.all.return_value = [article]

@@ -15,12 +15,26 @@ from app.core.database import get_session
 from app.dependencies.auth import current_admin
 from app.models.ai_analysis import AIAnalysis
 from app.models.article import Article
-from app.modules.ai.service import CATEGORY_LABELS
+from app.models.system_config import SystemConfig
 from app.utils.response import error, success
 
 logger = logging.getLogger("shixun.articles")
 
 router = APIRouter(prefix="/api/v1", tags=["articles"])
+
+
+async def _get_category_labels(session: AsyncSession) -> list[str]:
+    """从 SystemConfig 读取分类标签，无配置时返回默认值。"""
+    result = await session.execute(
+        select(SystemConfig).where(SystemConfig.key == "category_labels")
+    )
+    cfg = result.scalar_one_or_none()
+    if cfg and cfg.value and isinstance(cfg.value, list):
+        return [str(l).strip() for l in cfg.value if str(l).strip()]
+    return [
+        "最新政策", "数字经济", "人工智能", "数据要素", "通信",
+        "申报", "潜在商机", "具身智能", "车路云协同", "新型工业化", "算力",
+    ]
 
 
 def _serialize_article(article: Article, analysis: AIAnalysis | None) -> dict:
@@ -97,6 +111,16 @@ async def list_articles(
     total = (await session.execute(count_stmt)).scalar_one()
 
     return success({"items": items, "total": total, "limit": limit, "offset": offset}, request=request)
+
+
+@router.get("/articles/category-labels")
+async def list_category_labels(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+):
+    """获取当前分类标签列表（公开接口，无需登录）。"""
+    labels = await _get_category_labels(session)
+    return success({"labels": labels}, request=request)
 
 
 @router.get("/articles/{article_id}")
@@ -406,7 +430,7 @@ async def update_article_categories(
     if len(categories) > 3:
         return error(1001, "分类标签最多 3 个", http_status=400, request=request)
 
-    valid_labels = set(CATEGORY_LABELS + ["未分类"])
+    valid_labels = set(await _get_category_labels(session) + ["未分类"])
     for c in categories:
         if not isinstance(c, dict) or "label" not in c:
             return error(1001, "每个分类必须包含 label 字段", http_status=400, request=request)

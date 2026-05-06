@@ -16,7 +16,7 @@ def sample_report():
         date_range_end=date(2026, 5, 3),
         categories=[
             CategoryGroup(
-                name="政策法规",
+                name="最新政策",
                 articles=[
                     ArticleItem(title="政策A", summary="摘要A", url="https://a.com", publish_date=date(2026, 4, 28), source_unit="来源A"),
                     ArticleItem(title="政策B", summary="摘要B", url="https://b.com", publish_date=date(2026, 4, 29), source_unit="来源B"),
@@ -34,7 +34,7 @@ class TestBuildHtml:
         assert "2026-04-27" in html
         assert "2026-05-03" in html
         assert "2" in html
-        assert "政策法规" in html
+        assert "最新政策" in html
         assert "政策A" in html
         assert "摘要A" in html
 

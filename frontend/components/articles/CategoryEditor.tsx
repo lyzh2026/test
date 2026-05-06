@@ -1,12 +1,7 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, ApiError } from '@/lib/api';
-
-const ALL_CATEGORIES = [
-  '政策法规', '经济金融', '科技创新', '民生社保', '教育文化',
-  '医疗卫生', '环境生态', '国际外交', '国防军事', '农业农村', '工业贸易', '未分类',
-];
 
 type Category = { label: string; confidence: number };
 
@@ -18,10 +13,17 @@ export function CategoryEditor({
   initialCategories: Category[];
 }) {
   const [categories, setCategories] = useState<Category[]>(initialCategories);
+  const [allLabels, setAllLabels] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const available = ALL_CATEGORIES.filter(
+  useEffect(() => {
+    api.get<{ labels: string[] }>('/api/v1/articles/category-labels')
+      .then((data) => setAllLabels(data.labels || []))
+      .catch(() => setAllLabels([]));
+  }, []);
+
+  const available = allLabels.filter(
     (l) => !categories.some((c) => c.label === l)
   );
 
