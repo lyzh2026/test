@@ -40,6 +40,10 @@ class BatchDeleteRequest(BaseModel):
     task_ids: list[str] = Field(min_length=1, max_length=100)
 
 
+class AIBrowseRequest(BaseModel):
+    urls: list[str] = Field(min_length=1, max_length=20)
+
+
 class TaskListItem(BaseModel):
     task_id: str
     task_name: str | None

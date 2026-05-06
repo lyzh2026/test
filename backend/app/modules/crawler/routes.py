@@ -10,7 +10,7 @@ from app.core.database import get_session
 from app.core.scheduler import scheduler
 from app.dependencies.auth import current_admin
 from app.modules.crawler import service
-from app.schemas.crawler import BatchDeleteRequest, CrawlerTaskCreate
+from app.schemas.crawler import AIBrowseRequest, BatchDeleteRequest, CrawlerTaskCreate
 from app.utils.response import error, success
 from app.utils.url_validator import URLValidationError
 
@@ -119,6 +119,22 @@ async def retry_task(
     if not task:
         return error(2004, "任务无法重试（不存在、状态非 failed/partial_failed、或无失败 URL）", http_status=400, request=request)
     return success(_serialize_task(task), request=request)
+
+
+@router.post("/task/{task_id}/ai-browse")
+async def ai_browse_task(
+    task_id: str,
+    payload: AIBrowseRequest,
+    request: Request,
+    _: object = Depends(current_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """用 AI 联网搜索浏览失败 URL，提取内容入库。"""
+    task = await service.get_task(session, task_id)
+    if not task:
+        return error(2003, "任务不存在", http_status=404, request=request)
+    result = await service.ai_browse_urls(task_id, payload.urls, session)
+    return success(result, request=request)
 
 
 @router.delete("/task/{task_id}")

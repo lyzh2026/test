@@ -80,3 +80,24 @@ def clear_llm_cache():
 
 # 平滑过渡：保留旧函数名
 get_kimi_client = get_llm_client
+
+
+async def get_ai_config() -> dict:
+    """返回完整 AI 配置 dict（含 provider 字段）。"""
+    return await _load_ai_config()
+
+
+def get_web_search_tools(provider: str) -> list[dict]:
+    """根据 provider 返回对应的联网搜索 tools 参数。"""
+    p = provider.lower()
+    if p in ("kimi", "moonshot", "deepseek"):
+        return [{"type": "builtin_function", "function": {"name": "$web_search"}}]
+    if p in ("zhipu", "qwen"):
+        return [{"type": "builtin_function", "function": {"name": "web_search"}}]
+    if p == "openai":
+        return [{"type": "function", "function": {
+            "name": "web_search",
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+        }}]
+    # 默认 Kimi 风格
+    return [{"type": "builtin_function", "function": {"name": "$web_search"}}]

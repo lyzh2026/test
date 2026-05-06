@@ -777,6 +777,185 @@ async def retry_failed_urls(task_id: str, session: AsyncSession) -> CrawlerTask 
     return task
 
 
+# === AI 浏览（LLM 联网搜索降级） ===
+
+_AI_BROWSE_PROMPT = """请访问以下 URL，提取页面中的文章内容。
+
+URL: {url}
+
+请输出严格 JSON（不要任何解释）：
+{{
+  "original_title": "文章标题",
+  "source_unit": "来源机构（如网站名称、发布单位）",
+  "publish_date": "YYYY-MM-DD（发布日期，不确定则为 null）",
+  "raw_content": "文章正文（Markdown 格式，去除导航、广告、推荐栏、版权声明）"
+}}
+
+规则：
+1. 只输出 JSON。
+2. raw_content 必须是完整正文，去除所有非正文内容。
+3. 如果该 URL 不是文章页面（如首页、列表页），将 original_title 设为页面标题，raw_content 设为可获取的主要内容。
+4. 如果无法访问或内容为空，输出 {{"original_title": "", "raw_content": "", "error": "原因描述"}}。
+"""
+
+
+def _extract_json_simple(content: str) -> dict | None:
+    """从 LLM 响应中提取 JSON 对象。"""
+    import json
+    try:
+        return json.loads(content)
+    except Exception:
+        pass
+    m = re.search(r"\{[\s\S]*\}", content)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except Exception:
+            return None
+    return None
+
+
+async def _store_ai_browsed_article(
+    *, task_id: str, url: str, title: str, content: str,
+    source: str | None, date_str: str | None, target_date: date,
+) -> str | None:
+    """存储 AI 浏览获取的文章，返回 article_id 或 None（去重/过短）。"""
+    if not content or len(content.strip()) < 100:
+        return None
+
+    content = _clean_news_noise(content)
+
+    publish_date = target_date
+    if date_str:
+        try:
+            publish_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except Exception:
+            pass
+
+    fingerprint = hashlib.md5(f"{title.strip()}{content[:200].strip()}".encode()).hexdigest()
+    try:
+        if await redis_client.exists(f"af:{fingerprint}"):
+            logger.info("ai_browse dedup(md5) hit: %s", url)
+            return None
+    except Exception:
+        pass
+
+    original_link = _normalize_url(url)
+    article_id = None
+
+    async with AsyncSessionLocal() as sess:
+        existing = await sess.execute(select(Article).where(Article.original_link == original_link))
+        row = existing.scalar_one_or_none()
+        if row:
+            return str(row.id)
+
+        article = Article(
+            task_id=task_id,
+            original_title=(title or "")[:512],
+            source_unit=source,
+            original_link=original_link,
+            publish_date=publish_date,
+            raw_content=content,
+            status="raw",
+        )
+        sess.add(article)
+        try:
+            await sess.commit()
+            await sess.refresh(article)
+            article_id = str(article.id)
+        except IntegrityError:
+            await sess.rollback()
+            return None
+
+    if article_id:
+        try:
+            await redis_client.setex(f"af:{fingerprint}", 604800, "1")
+        except Exception:
+            pass
+        try:
+            scheduler.add_job(
+                _ai_analyze_dispatch,
+                id=f"ai_analyze:{article_id}",
+                args=[article_id],
+                trigger=DateTrigger(),
+                replace_existing=True,
+            )
+        except Exception as e:
+            logger.warning("schedule ai_analyze failed: %r", e)
+
+    return article_id
+
+
+async def ai_browse_urls(task_id: str, urls: list[str], session: AsyncSession) -> dict:
+    """用 LLM 联网搜索浏览失败 URL，提取内容入库。"""
+    from app.modules.ai.kimi_client import get_ai_config, get_llm_client, get_web_search_tools
+
+    client, model = await get_llm_client()
+    if not client:
+        return {"success": 0, "failed": [{"url": u, "reason": "AI API Key 未配置"} for u in urls], "total": len(urls)}
+
+    cfg = await get_ai_config()
+    provider = cfg.get("provider", "kimi")
+    tools = get_web_search_tools(provider)
+
+    task = await session.get(CrawlerTask, task_id)
+    if not task:
+        return {"success": 0, "failed": [{"url": u, "reason": "任务不存在"} for u in urls], "total": len(urls)}
+
+    success_urls: list[str] = []
+    failed: list[dict] = []
+
+    for url in urls:
+        try:
+            prompt = _AI_BROWSE_PROMPT.format(url=url)
+            resp = await client.chat.completions.create(
+                model=model,
+                temperature=0.1,
+                max_tokens=4096,
+                tools=tools,
+                messages=[
+                    {"role": "system", "content": "你是一个网页内容提取助手。请使用内置的网页浏览功能访问用户提供的 URL，然后提取文章的标题、正文、来源和发布日期。"},
+                    {"role": "user", "content": prompt},
+                ],
+            )
+            raw = resp.choices[0].message.content or ""
+            data = _extract_json_simple(raw)
+
+            if not data or not data.get("raw_content"):
+                reason = data.get("error", "LLM 未能提取内容") if data else "LLM 响应解析失败"
+                failed.append({"url": url, "reason": reason})
+                continue
+
+            article_id = await _store_ai_browsed_article(
+                task_id=task_id, url=url,
+                title=data.get("original_title", ""),
+                content=data.get("raw_content", ""),
+                source=data.get("source_unit"),
+                date_str=data.get("publish_date"),
+                target_date=task.target_date,
+            )
+            if article_id:
+                success_urls.append(url)
+            else:
+                failed.append({"url": url, "reason": "文章存储失败（可能已存在或内容过短）"})
+        except Exception as e:
+            logger.warning("ai_browse failed for %s: %r", url, e)
+            failed.append({"url": url, "reason": f"LLM 调用失败: {e!r}"})
+
+    # 更新任务的 failed_details
+    if success_urls:
+        success_set = set(success_urls)
+        remaining = [d for d in (task.failed_details or []) if d.get("url") not in success_set]
+        task.failed_details = remaining
+        task.failed_urls = len(remaining)
+        task.completed_urls = (task.completed_urls or 0) + len(success_urls)
+        if not remaining and task.status in ("partial_failed", "failed"):
+            task.status = "completed" if task.completed_urls >= (task.total_urls or 0) else "partial_failed"
+        await session.commit()
+
+    return {"success": len(success_urls), "failed": failed, "total": len(urls)}
+
+
 async def delete_task(task_id: str) -> bool:
     """取消任务，解绑关联文章，并从数据库删除 CrawlerTask 记录。"""
     await cancel_task(task_id)

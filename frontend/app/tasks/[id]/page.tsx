@@ -4,6 +4,7 @@ import { DeleteButton } from '@/components/tasks/DeleteButton';
 import { RetryButton } from '@/components/tasks/RetryButton';
 import { CancelButton } from '@/components/tasks/CancelButton';
 import { TaskProgress } from '@/components/tasks/TaskProgress';
+import { FailedUrlTable } from '@/components/tasks/FailedUrlTable';
 import { serverFetch, ServerApiError } from '@/lib/server-fetch';
 import { formatDate } from '@/lib/utils';
 
@@ -41,14 +42,6 @@ const STATUS_LABEL: Record<string, string> = {
   partial_failed: '部分失败',
   failed: '失败',
   cancelled: '已取消',
-};
-
-const STAGE_BADGE: Record<string, string> = {
-  render: 'badge-red',
-  extract: 'badge-amber',
-  validate: 'badge-gray',
-  date_filter: 'badge-blue',
-  dedup: 'badge-green',
 };
 
 export const dynamic = 'force-dynamic';
@@ -107,31 +100,11 @@ export default async function TaskDetailPage({ params }: { params: { id: string 
       </div>
 
       {task.failed_details.length > 0 && (
-        <section className="card p-6 mb-6">
-          <h2 className="mb-4 text-sm font-medium" style={{ color: '#18181b' }}>失败详情</h2>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="text-left text-xs" style={{ color: '#9ca3af' }}>
-                <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
-                  <th className="pb-2 pr-4">URL</th>
-                  <th className="pb-2 pr-4 w-20">code</th>
-                  <th className="pb-2 pr-4 w-20">阶段</th>
-                  <th className="pb-2">原因</th>
-                </tr>
-              </thead>
-              <tbody>
-                {task.failed_details.map((d, i) => (
-                  <tr key={i} style={{ borderBottom: '1px solid #e5e7eb' }}>
-                    <td className="break-all py-2 pr-2 text-xs" style={{ color: '#6b7280' }}>{d.url}</td>
-                    <td className="py-2 pr-4" style={{ color: '#ef4444' }}>{d.code}</td>
-                    <td className="py-2 pr-4">{d.stage ? <span className={STAGE_BADGE[d.stage] || 'badge-gray'}>{d.stage}</span> : '-'}</td>
-                    <td className="py-2 text-xs" style={{ color: '#6b7280' }}>{d.reason}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
+        <FailedUrlTable
+          taskId={task.id}
+          failedDetails={task.failed_details}
+          taskStatus={task.status}
+        />
       )}
 
       <section className="card p-6">
