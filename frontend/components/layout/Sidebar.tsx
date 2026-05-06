@@ -11,8 +11,8 @@ const NAV_MAIN = [
 ];
 
 const NAV_SECONDARY = [
-  { href: '/tasks/new', label: '新建任务', icon: '⊕' },
   { href: '/admin/distribution', label: '分发配置', icon: '⇶' },
+  { href: '/admin/settings', label: '设置', icon: '⚙' },
 ];
 
 export function Sidebar() {

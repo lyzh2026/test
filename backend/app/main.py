@@ -62,6 +62,12 @@ async def lifespan(app: FastAPI):
     await proxy_pool.startup(settings.proxy_list_parsed if settings.PROXY_ENABLED else [])
     await renderer.startup()
 
+    # 启动时清理僵尸任务（上次重启遗留的 running/pending）
+    from app.modules.crawler.service import scan_stale_running_tasks
+    stale = await scan_stale_running_tasks(timeout_sec=600)
+    if stale:
+        logger.info("startup: cleaned %s stale running tasks", stale)
+
     if not scheduler.running:
         scheduler.start()
     scheduler.add_job(
@@ -77,6 +83,9 @@ async def lifespan(app: FastAPI):
         trigger=CronTrigger(day_of_week="mon", hour=8, minute=30),
         replace_existing=True,
     )
+    from app.modules.crawler.scheduled_service import restore_scheduled_crawls
+    await restore_scheduled_crawls()
+
     logger.info("shixun backend ready")
     try:
         yield

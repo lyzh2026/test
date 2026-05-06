@@ -33,7 +33,7 @@ export const dynamic = 'force-dynamic';
 export default async function ArticlesPage({
   searchParams,
 }: {
-  searchParams: { date_from?: string; date_to?: string; category?: string; keyword?: string; status?: string; bookmarked?: string; offset?: string };
+  searchParams: { date_from?: string; date_to?: string; category?: string; keyword?: string; status?: string; bookmarked?: string; task_id?: string; offset?: string };
 }) {
   const offset = parseInt(searchParams.offset || '0', 10) || 0;
   const limit = 30;
@@ -46,6 +46,7 @@ export default async function ArticlesPage({
   if (searchParams.keyword) params.set('keyword', searchParams.keyword);
   if (searchParams.status) params.set('status', searchParams.status);
   if (searchParams.bookmarked === '1') params.set('bookmarked', 'true');
+  if (searchParams.task_id) params.set('task_id', searchParams.task_id);
 
   let resp: ArticleListResp | null = null;
   let errorMsg: string | null = null;
@@ -69,7 +70,13 @@ export default async function ArticlesPage({
     <main className="min-h-screen p-8 animate-fade-in">
       <div className="mb-8">
         <h1 className="text-2xl font-semibold" style={{ color: '#18181b' }}>文章列表</h1>
-        <p className="mt-1.5 text-sm" style={{ color: '#9ca3af' }}>浏览与管理采集的文章</p>
+        <p className="mt-1.5 text-sm" style={{ color: '#9ca3af' }}>
+          {searchParams.task_id ? (
+            <span>按任务筛选 · <Link href="/articles" className="underline" style={{ color: '#3b82f6' }}>清除筛选</Link></span>
+          ) : (
+            '浏览与管理采集的文章'
+          )}
+        </p>
       </div>
 
       {/* Filters */}

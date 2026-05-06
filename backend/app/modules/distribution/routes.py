@@ -2,8 +2,9 @@
 import asyncio
 import logging
 from datetime import datetime, timezone
+from typing import Optional
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -171,15 +172,16 @@ async def list_logs(
 @router.post("/trigger")
 async def trigger_dispatch(
     request: Request,
+    force: Optional[bool] = Query(default=False),
     _: object = Depends(current_admin),
     session: AsyncSession = Depends(get_session),
 ):
-    """手动触发周报分发（调试用）。"""
+    """手动触发周报分发。force=true 跳过幂等检查（补发）。"""
     from app.modules.distribution.service import dispatch_weekly_report
 
     try:
-        await dispatch_weekly_report()
-        return success({"message": "周报分发已触发"}, request=request)
+        await dispatch_weekly_report(force=bool(force))
+        return success({"message": "周报分发已触发", "force": bool(force)}, request=request)
     except Exception as e:
         logger.error("手动触发周报分发失败: %s", e)
         return error(2001, f"触发失败: {str(e)}", http_status=500, request=request)
@@ -211,10 +213,8 @@ async def send_article(
     session: AsyncSession = Depends(get_session),
 ):
     """通过指定邮件通道发送单篇文章。"""
-    from email.mime.text import MIMEText
-    import smtplib
-
     from app.models.article import Article
+    from app.modules.distribution.service import send_article_email
     from sqlalchemy.orm import joinedload
 
     config_id = payload.get("config_id", "")
@@ -229,63 +229,9 @@ async def send_article(
     if not cfg or not cfg.enabled or cfg.channel_type != "email":
         return error(1003, "邮件通道不存在或未启用", http_status=400, request=request)
 
-    c = cfg.config
-    summary = ""
-    keywords = ""
-    if article.ai_analysis:
-        summary = article.ai_analysis.summary or ""
-        keywords = ", ".join(article.ai_analysis.keywords or [])
-
-    html = f"""\
-<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"></head>
-<body style="font-family:-apple-system,sans-serif;padding:20px;background:#f5f5f5;">
-<div style="max-width:640px;margin:0 auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.1);">
-<div style="background:#1a73e8;padding:20px;color:#fff;">
-  <h1 style="margin:0;font-size:18px;">{article.original_title}</h1>
-</div>
-<div style="padding:20px;">
-  <p style="font-size:13px;color:#666;margin:0 0 12px;">
-    {article.source_unit or '来源未知'} · {article.publish_date}
-  </p>
-  {f'<p style="font-size:14px;line-height:1.6;color:#333;margin:0 0 16px;">{summary}</p>' if summary else ''}
-  {f'<p style="font-size:12px;color:#999;">关键词：{keywords}</p>' if keywords else ''}
-  <p style="margin:20px 0 0;">
-    <a href="{article.original_link}" style="display:inline-block;background:#1a73e8;color:#fff;text-decoration:none;padding:10px 24px;border-radius:6px;font-size:14px;">查看原文 →</a>
-  </p>
-</div>
-<div style="padding:12px 20px;font-size:11px;color:#999;border-top:1px solid #eee;text-align:center;">
-  本邮件由拾讯系统自动发送
-</div>
-</div>
-</body>
-</html>"""
-
-    msg = MIMEText(html, "html", "utf-8")
-    msg["Subject"] = f"拾讯 - {article.original_title}"
-    msg["From"] = c.get("from_addr", c.get("smtp_user", ""))
-    to_addrs = c.get("to_addrs", [])
-    msg["To"] = ", ".join(to_addrs)
-
-    loop = asyncio.get_running_loop()
-    use_tls = c.get("use_tls", True)
-    smtp_host = c["smtp_host"]
-    smtp_port = c["smtp_port"]
-
-    def _send():
-        if use_tls:
-            with smtplib.SMTP_SSL(smtp_host, smtp_port) as server:
-                server.login(c["smtp_user"], c["smtp_pass"])
-                server.sendmail(c["smtp_user"], to_addrs, msg.as_string())
-        else:
-            with smtplib.SMTP(smtp_host, smtp_port) as server:
-                server.starttls()
-                server.login(c["smtp_user"], c["smtp_pass"])
-                server.sendmail(c["smtp_user"], to_addrs, msg.as_string())
-
     try:
-        await loop.run_in_executor(None, _send)
+        await send_article_email(article, cfg.config)
+        to_addrs = cfg.config.get("to_addrs", [])
         return success({"message": f"文章已发送至 {len(to_addrs)} 个收件人"}, request=request)
     except Exception as e:
         return error(2002, f"发送失败: {str(e)}", http_status=500, request=request)

@@ -1,13 +1,15 @@
-"""白名单 CRUD API。"""
+"""白名单 CRUD + 系统设置 API。"""
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Request
+from openai import AsyncOpenAI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
 from app.dependencies.auth import current_admin
 from app.models.allowed_domain import AllowedDomain
+from app.models.system_config import SystemConfig
 from app.utils.response import error, success
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
@@ -114,3 +116,92 @@ async def delete_allowed(
     item.deleted_at = datetime.now(timezone.utc)
     await session.commit()
     return success({"id": item_id}, request=request)
+
+
+# ── AI 模型设置 ──────────────────────────────────────────────
+
+
+def _mask_key(key: str) -> str:
+    if not key or len(key) <= 8:
+        return "***"
+    return key[:8] + "***"
+
+
+@router.get("/settings/ai")
+async def get_ai_settings(
+    request: Request,
+    _: object = Depends(current_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(
+        select(SystemConfig).where(SystemConfig.key == "ai_provider")
+    )
+    cfg = result.scalar_one_or_none()
+    if cfg and cfg.value:
+        val = dict(cfg.value)
+        val["api_key"] = _mask_key(val.get("api_key", ""))
+        return success(val, request=request)
+    return success({"provider": "kimi", "api_key": "", "base_url": "", "model": ""}, request=request)
+
+
+@router.put("/settings/ai")
+async def update_ai_settings(
+    payload: dict,
+    request: Request,
+    _: object = Depends(current_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    api_key = (payload.get("api_key") or "").strip()
+    base_url = (payload.get("base_url") or "").strip()
+    model = (payload.get("model") or "").strip()
+    provider = (payload.get("provider") or "custom").strip()
+
+    if not api_key:
+        return error(1001, "API Key 不能为空", http_status=400, request=request)
+    if not base_url:
+        return error(1001, "Base URL 不能为空", http_status=400, request=request)
+    if not model:
+        return error(1001, "Model 不能为空", http_status=400, request=request)
+
+    result = await session.execute(
+        select(SystemConfig).where(SystemConfig.key == "ai_provider")
+    )
+    cfg = result.scalar_one_or_none()
+    if cfg:
+        cfg.value = {"provider": provider, "api_key": api_key, "base_url": base_url, "model": model}
+    else:
+        cfg = SystemConfig(
+            key="ai_provider",
+            value={"provider": provider, "api_key": api_key, "base_url": base_url, "model": model},
+        )
+        session.add(cfg)
+    await session.commit()
+
+    # 清除客户端缓存
+    from app.modules.ai.kimi_client import clear_llm_cache
+    clear_llm_cache()
+
+    return success({"provider": provider, "base_url": base_url, "model": model}, request=request)
+
+
+@router.post("/settings/ai/test")
+async def test_ai_connection(
+    request: Request,
+    _: object = Depends(current_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    from app.modules.ai.kimi_client import get_llm_client
+    client, model = await get_llm_client()
+    if not client:
+        return error(2001, "AI API Key 未配置", http_status=400, request=request)
+
+    try:
+        resp = await client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": "请回复 ok"}],
+            max_tokens=10,
+        )
+        reply = (resp.choices[0].message.content or "").strip()
+        return success({"ok": True, "model": model, "reply": reply}, request=request)
+    except Exception as e:
+        return error(2002, f"连接测试失败：{e!r}", http_status=502, request=request)

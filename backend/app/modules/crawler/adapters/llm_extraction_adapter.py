@@ -10,7 +10,7 @@ from typing import List, Optional
 from bs4 import BeautifulSoup
 
 from app.core.config import settings
-from app.modules.ai.kimi_client import get_kimi_client
+from app.modules.ai.kimi_client import get_llm_client
 from app.modules.crawler.adapters.base import ArticleDraft, RenderedPage, SpiderAdapter
 
 logger = logging.getLogger(__name__)
@@ -101,7 +101,7 @@ class LLMExtractionAdapter(SpiderAdapter):
     name = "llm_extraction"
 
     async def extract(self, page: RenderedPage) -> ArticleDraft | None:
-        client, model = get_kimi_client()
+        client, model = await get_llm_client()
         if not client:
             return None
 

@@ -2,6 +2,7 @@
 import io
 import logging
 import re
+import uuid
 from datetime import date, timedelta
 from urllib.parse import quote
 
@@ -54,6 +55,7 @@ async def list_articles(
     keyword: str | None = Query(default=None, max_length=128),
     status: str | None = Query(default=None, max_length=32),
     bookmarked: bool | None = Query(default=None),
+    task_id: str | None = Query(default=None, max_length=64),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     _: object = Depends(current_admin),
@@ -72,6 +74,11 @@ async def list_articles(
     if keyword:
         like = f"%{keyword}%"
         conds.append(Article.original_title.ilike(like))
+    if task_id:
+        try:
+            conds.append(Article.task_id == uuid.UUID(task_id))
+        except ValueError:
+            pass
     if category:
         conds.append(AIAnalysis.categories.op("@>")([{"label": category}]))
     if conds:

@@ -7,7 +7,7 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.models.article import Article
 from app.models.ai_analysis import AIAnalysis
-from app.modules.ai.kimi_client import get_kimi_client
+from app.modules.ai.kimi_client import get_llm_client
 from .templates import _split_paragraphs, TEMPLATES
 
 # 内存缓存 AI 重写结果，避免切换模板时重复生成
@@ -59,7 +59,7 @@ async def _ai_rewrite_for_wechat(data: dict) -> dict:
     if article_id in _wechat_rewrite_cache:
         return _wechat_rewrite_cache[article_id]
 
-    client, model = get_kimi_client()
+    client, model = await get_llm_client()
     if client is None:
         return data
 

@@ -1,18 +1,20 @@
-"""AI 中枢：Kimi 分类与摘要 + 文章状态机驱动。"""
+"""AI 中枢：多模型分类与摘要 + 文章状态机驱动。"""
+import asyncio
 import json
 import logging
 import re
 import time
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Callable, Optional
 
+import openai
 from sqlalchemy import select
 
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.models.ai_analysis import AIAnalysis
 from app.models.article import Article
-from app.modules.ai.kimi_client import get_kimi_client
+from app.modules.ai.kimi_client import get_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -87,13 +89,34 @@ def _clip(text: str, n: int) -> str:
     return text[:n]
 
 
+def _is_retryable(exc: Exception) -> bool:
+    """判断异常是否可重试：429/5xx/超时/连接错误。"""
+    if isinstance(exc, openai.APIStatusError):
+        return exc.status_code == 429 or exc.status_code >= 500
+    return isinstance(exc, (openai.APITimeoutError, openai.APIConnectionError))
+
+
+async def _retry_call(coro_factory: Callable, max_retries: int = 3):
+    """带指数退避的重试包装器。coro_factory 必须返回一个新的协程。"""
+    for attempt in range(max_retries):
+        try:
+            return await coro_factory()
+        except Exception as e:
+            if _is_retryable(e) and attempt < max_retries - 1:
+                wait = 2 ** attempt
+                logger.warning("AI 调用失败（可重试），%d/%d 次，等待 %ds: %r", attempt + 1, max_retries, wait, e)
+                await asyncio.sleep(wait)
+            else:
+                raise
+
+
 async def _classify(client, model, title: str, content: str) -> tuple[list[dict], list[str]]:
     prompt = _CLASSIFY_PROMPT.format(
         labels="、".join(CATEGORY_LABELS),
         title=_clip(title, 200),
         content=_clip(content, 4000),
     )
-    resp = await client.chat.completions.create(
+    resp = await _retry_call(lambda: client.chat.completions.create(
         model=model,
         temperature=0.3,
         max_tokens=1024,
@@ -101,7 +124,7 @@ async def _classify(client, model, title: str, content: str) -> tuple[list[dict]
             {"role": "system", "content": "你是严谨的中文文章分类器，必须只输出 JSON。"},
             {"role": "user", "content": prompt},
         ],
-    )
+    ))
     raw = resp.choices[0].message.content or ""
     data = _extract_json(raw) or {}
     scores = data.get("scores") or {}
@@ -126,7 +149,7 @@ async def _classify(client, model, title: str, content: str) -> tuple[list[dict]
 
 async def _summarize(client, model, title: str, content: str) -> str:
     prompt = _SUMMARY_PROMPT.format(title=_clip(title, 200), content=_clip(content, 5000))
-    resp = await client.chat.completions.create(
+    resp = await _retry_call(lambda: client.chat.completions.create(
         model=model,
         temperature=0.3,
         max_tokens=512,
@@ -134,7 +157,7 @@ async def _summarize(client, model, title: str, content: str) -> str:
             {"role": "system", "content": "你是严谨的中文新闻摘要生成器，输出简洁客观。"},
             {"role": "user", "content": prompt},
         ],
-    )
+    ))
     text = (resp.choices[0].message.content or "").strip()
     return text[:400]
 
@@ -152,15 +175,15 @@ async def analyze_article(article_id: str) -> dict:
         article.status = "analyzing"
         await session.commit()
 
-    client, model = get_kimi_client()
+    client, model = await get_llm_client()
     if not client:
         async with AsyncSessionLocal() as session:
             article = await session.get(Article, article_id)
             if article:
                 article.status = "failed_permanent"
-                article.failed_reason = "Kimi API Key 未配置"
+                article.failed_reason = "AI API Key 未配置"
                 await session.commit()
-        return {"ok": False, "reason": "no_kimi_key"}
+        return {"ok": False, "reason": "no_api_key"}
 
     title = article.original_title
     content = article.raw_content or ""
@@ -178,10 +201,11 @@ async def analyze_article(article_id: str) -> dict:
         summary = await _summarize(client, model, title, content)
     except Exception as e:
         logger.exception("AI analyze failed for %s", article_id)
+        target_status = "failed_retryable" if _is_retryable(e) else "failed_permanent"
         async with AsyncSessionLocal() as session:
             a = await session.get(Article, article_id)
             if a:
-                a.status = "failed_retryable"
+                a.status = target_status
                 a.failed_reason = f"AI 调用失败：{e!r}"
                 await session.commit()
         return {"ok": False, "reason": f"ai_error:{e!r}"}
@@ -218,13 +242,19 @@ async def analyze_article(article_id: str) -> dict:
 
 async def scan_analyzing_timeouts() -> int:
     """将卡在 analyzing 超过阈值的文章重置为 failed_retryable。"""
-    cutoff = datetime.now(timezone.utc).timestamp() - settings.AI_ANALYZING_TIMEOUT_SEC
+    now = datetime.now(timezone.utc)
+    from datetime import timedelta
+    cutoff = now - timedelta(seconds=settings.AI_ANALYZING_TIMEOUT_SEC)
     moved = 0
     async with AsyncSessionLocal() as session:
         res = await session.execute(select(Article).where(Article.status == "analyzing"))
         rows = res.scalars().all()
         for a in rows:
-            if a.updated_at and a.updated_at.timestamp() < cutoff:
+            # 确保 updated_at 带时区后比较
+            updated = a.updated_at
+            if updated and updated.tzinfo is None:
+                updated = updated.replace(tzinfo=timezone.utc)
+            if updated and updated < cutoff:
                 a.status = "failed_retryable"
                 a.failed_reason = "analyzing 超时（>5min），自动回退"
                 moved += 1

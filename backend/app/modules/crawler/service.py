@@ -288,7 +288,10 @@ async def _run_discovery_and_crawl(
 
 
 async def run_crawl_job(task_id: str, urls: list[str]):
-    """APScheduler 入口：单任务整体执行，每完成一个 URL 推送进度事件。"""
+    """APScheduler 入口：单任务整体执行，每完成一个 URL 推送进度事件。
+
+    顶层 try/except/finally 确保任何异常都不会让任务卡在 running 状态。
+    """
     logger.info("crawl job start: task=%s urls=%s", task_id, len(urls))
     async with AsyncSessionLocal() as session:
         task = await session.get(CrawlerTask, task_id)
@@ -300,83 +303,117 @@ async def run_crawl_job(task_id: str, urls: list[str]):
         await session.commit()
 
     total = len(urls)
-    progress_bus.emit(ProgressEvent(
-        task_id=task_id, status="running", total=total,
-        message=f"开始抓取 {total} 个 URL",
-    ))
-
     completed = 0
     failed = 0
-
-    async def _one(url: str):
-        nonlocal completed, failed
-        if task_id in _cancelled_tasks:
-            return None
-        progress_bus.emit(ProgressEvent(
-            task_id=task_id, status="running",
-            completed=completed, failed=failed, total=total,
-            current_url=url,
-        ))
-        await domain_rate_limiter.acquire(url)
-        try:
-            res = await _crawl_one(task_id, url, target_date=task.target_date, date_to=task.date_to)
-        finally:
-            await domain_rate_limiter.release(url)
-        if isinstance(res, Exception):
-            failed += 1
-        elif isinstance(res, dict) and res.get("ok"):
-            completed += 1
-        elif isinstance(res, dict) and (res.get("dedup") or res.get("filtered")):
-            completed += 1
-        else:
-            failed += 1
-        progress_bus.emit(ProgressEvent(
-            task_id=task_id, status="running",
-            completed=completed, failed=failed, total=total,
-            message="完成" if not isinstance(res, Exception) and isinstance(res, dict) and res.get("ok") else "失败",
-        ))
-        return res
+    final_status = "failed"
+    fatal_error: str | None = None
 
     try:
-        results = await asyncio.wait_for(
-            asyncio.gather(*[_one(u) for u in urls], return_exceptions=True),
-            timeout=max(1800, len(urls) * 60),  # 全局超时：至少 30min 或每 URL 1min
-        )
-    except asyncio.TimeoutError:
-        logger.warning("crawl job timeout: task=%s", task_id)
-        results = [{"ok": False, "code": 5001, "reason": "任务全局超时", "stage": "timeout"}] * len(urls)
+        progress_bus.emit(ProgressEvent(
+            task_id=task_id, status="running", total=total,
+            message=f"开始抓取 {total} 个 URL",
+        ))
 
-    async with AsyncSessionLocal() as session:
-        t = await session.get(CrawlerTask, task_id)
-        if not t:
-            return
-        details: list = list(t.failed_details or [])
-        for url, res in zip(urls, results):
-            if isinstance(res, (Exception, BaseException)):
-                details.append({"url": url, "code": 5001, "reason": f"内部异常：{res!r}", "stage": "render"})
-            elif isinstance(res, dict) and not res.get("ok") and not res.get("dedup") and not res.get("filtered"):
-                details.append({"url": url, "code": res.get("code", 2001), "reason": res.get("reason", "未知错误"), "stage": res.get("stage", "")})
-        t.completed_urls = completed
-        t.failed_urls = len(details)
-        t.failed_details = details
-        t.completed_at = datetime.now(timezone.utc)
-        if task_id in _cancelled_tasks:
-            t.status = "cancelled"
-            _cancelled_tasks.discard(task_id)
-        elif failed == 0:
-            t.status = "completed"
-        elif completed == 0:
-            t.status = "failed"
-        else:
-            t.status = "partial_failed"
-        await session.commit()
+        async def _one(url: str):
+            nonlocal completed, failed
+            if task_id in _cancelled_tasks:
+                return None
+            progress_bus.emit(ProgressEvent(
+                task_id=task_id, status="running",
+                completed=completed, failed=failed, total=total,
+                current_url=url,
+            ))
+            await domain_rate_limiter.acquire(url)
+            try:
+                res = await _crawl_one(task_id, url, target_date=task.target_date, date_to=task.date_to)
+            finally:
+                await domain_rate_limiter.release(url)
+            if isinstance(res, Exception):
+                failed += 1
+            elif isinstance(res, dict) and res.get("ok"):
+                completed += 1
+            elif isinstance(res, dict) and (res.get("dedup") or res.get("filtered")):
+                completed += 1
+            else:
+                failed += 1
+            progress_bus.emit(ProgressEvent(
+                task_id=task_id, status="running",
+                completed=completed, failed=failed, total=total,
+                message="完成" if not isinstance(res, Exception) and isinstance(res, dict) and res.get("ok") else "失败",
+            ))
+            return res
 
-    progress_bus.emit(ProgressEvent(
-        task_id=task_id, status=t.status,
-        completed=completed, failed=failed, total=total,
-        message=f"任务{t.status}",
-    ))
-    logger.info("crawl job end: task=%s status=%s", task_id, t.status)
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(*[_one(u) for u in urls], return_exceptions=True),
+                timeout=max(1800, len(urls) * 60),  # 全局超时：至少 30min 或每 URL 1min
+            )
+        except asyncio.TimeoutError:
+            logger.warning("crawl job timeout: task=%s", task_id)
+            results = [{"ok": False, "code": 5001, "reason": "任务全局超时", "stage": "timeout"}] * len(urls)
+
+        async with AsyncSessionLocal() as session:
+            t = await session.get(CrawlerTask, task_id)
+            if not t:
+                return
+            details: list = list(t.failed_details or [])
+            for url, res in zip(urls, results):
+                if isinstance(res, (Exception, BaseException)):
+                    details.append({"url": url, "code": 5001, "reason": f"内部异常：{res!r}", "stage": "render"})
+                elif isinstance(res, dict) and not res.get("ok") and not res.get("dedup") and not res.get("filtered"):
+                    details.append({"url": url, "code": res.get("code", 2001), "reason": res.get("reason", "未知错误"), "stage": res.get("stage", "")})
+            t.completed_urls = completed
+            t.failed_urls = len(details)
+            t.failed_details = details
+            t.completed_at = datetime.now(timezone.utc)
+            if task_id in _cancelled_tasks:
+                t.status = "cancelled"
+                _cancelled_tasks.discard(task_id)
+            elif failed == 0:
+                t.status = "completed"
+            elif completed == 0:
+                t.status = "failed"
+            else:
+                t.status = "partial_failed"
+            final_status = t.status
+            await session.commit()
+
+    except Exception as e:
+        logger.exception("crawl job fatal error: task=%s", task_id)
+        fatal_error = str(e)[:500]
+        final_status = "failed"
+
+    finally:
+        # 无论如何都确保任务状态被更新，不会卡在 running
+        if fatal_error:
+            try:
+                async with AsyncSessionLocal() as session:
+                    t = await session.get(CrawlerTask, task_id)
+                    if t and t.status == "running":
+                        t.status = "failed"
+                        t.completed_at = datetime.now(timezone.utc)
+                        details = list(t.failed_details or [])
+                        details.append({"url": "*", "code": 5001, "reason": f"任务异常终止：{fatal_error}", "stage": "job"})
+                        t.failed_details = details
+                        t.failed_urls = len(details)
+                        await session.commit()
+                        final_status = "failed"
+            except Exception:
+                logger.exception("crawl job: failed to update task status after fatal error")
+
+        # 清理取消标记
+        _cancelled_tasks.discard(task_id)
+
+        try:
+            progress_bus.emit(ProgressEvent(
+                task_id=task_id, status=final_status,
+                completed=completed, failed=failed, total=total,
+                message=f"任务{final_status}",
+            ))
+        except Exception:
+            pass
+
+        logger.info("crawl job end: task=%s status=%s", task_id, final_status)
 
 
 async def _crawl_one(task_id: str, url: str, *, target_date: date, date_to: date | None = None) -> dict:
@@ -771,11 +808,42 @@ async def batch_delete_tasks(task_ids: list[str]) -> dict:
     return {"deleted": deleted, "skipped": skipped}
 
 
-async def list_tasks(session: AsyncSession, *, limit: int = 50, offset: int = 0) -> list[CrawlerTask]:
-    res = await session.execute(
-        select(CrawlerTask).order_by(CrawlerTask.created_at.desc()).limit(limit).offset(offset)
-    )
-    return list(res.scalars().all())
+async def list_tasks(
+    session: AsyncSession,
+    *,
+    limit: int = 50,
+    offset: int = 0,
+    status: str | None = None,
+    date_from=None,
+    date_to=None,
+    keyword: str | None = None,
+) -> tuple[list[CrawlerTask], int]:
+    """返回 (tasks, total_count)，支持筛选。"""
+    from datetime import timedelta
+
+    from sqlalchemy import and_, func
+
+    conditions = []
+    if status:
+        conditions.append(CrawlerTask.status == status)
+    if date_from:
+        conditions.append(CrawlerTask.created_at >= date_from)
+    if date_to:
+        conditions.append(CrawlerTask.created_at < date_to + timedelta(days=1))
+    if keyword:
+        conditions.append(CrawlerTask.task_name.ilike(f"%{keyword}%"))
+
+    where = and_(*conditions) if conditions else None
+
+    total = (await session.execute(
+        select(func.count(CrawlerTask.id)).where(where) if where else select(func.count(CrawlerTask.id))
+    )).scalar_one()
+
+    stmt = select(CrawlerTask).order_by(CrawlerTask.created_at.desc()).limit(limit).offset(offset)
+    if where:
+        stmt = stmt.where(where)
+    res = await session.execute(stmt)
+    return list(res.scalars().all()), total
 
 
 async def get_task(session: AsyncSession, task_id: str) -> CrawlerTask | None:
@@ -879,3 +947,43 @@ def _hamming_distance(x: int, y: int) -> int:
     """计算两个 SimHash 值之间的 Hamming 距离。"""
     xor = x ^ y
     return xor.bit_count() if hasattr(int, "bit_count") else bin(xor).count("1")
+
+
+async def scan_stale_running_tasks(timeout_sec: int = 600) -> int:
+    """启动时扫描：将卡在 running/pending 超过阈值的任务标记为 failed。
+
+    典型场景：后端容器重启导致 APScheduler 内存 job 丢失，任务卡在 running。
+    """
+    from datetime import timedelta
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(seconds=timeout_sec)
+    moved = 0
+    async with AsyncSessionLocal() as session:
+        res = await session.execute(
+            select(CrawlerTask).where(CrawlerTask.status.in_(["running", "pending"]))
+        )
+        rows = res.scalars().all()
+        for t in rows:
+            # 用 started_at 或 created_at 判断是否超时
+            ref = t.started_at or t.created_at
+            if ref and ref.tzinfo is None:
+                ref = ref.replace(tzinfo=timezone.utc)
+            if ref and ref < cutoff:
+                old_status = t.status
+                t.status = "failed"
+                t.completed_at = now
+                details = list(t.failed_details or [])
+                details.append({
+                    "url": "*",
+                    "code": 5001,
+                    "reason": f"系统重启后自动终止（原状态: {old_status}）",
+                    "stage": "startup_scan",
+                })
+                t.failed_details = details
+                t.failed_urls = len(details)
+                moved += 1
+        if moved:
+            await session.commit()
+            logger.info("startup scan: marked %s stale tasks as failed", moved)
+    return moved

@@ -36,7 +36,27 @@ const STATUS_LABEL: Record<string, string> = {
   cancelled: '已取消',
 };
 
-export function TaskTable({ items }: { items: Task[] }) {
+function ProgressBar({ completed, total, failed }: { completed: number; total: number; failed: number }) {
+  if (total === 0) return <span style={{ color: '#9ca3af' }}>-</span>;
+  const pct = Math.round((completed / total) * 100);
+  const failedPct = Math.round((failed / total) * 100);
+  return (
+    <div className="flex items-center gap-2">
+      <div className="h-1.5 w-20 overflow-hidden rounded-full" style={{ background: '#f3f4f6' }}>
+        <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: '#22c55e' }} />
+        {failedPct > 0 && (
+          <div className="h-full rounded-full -mt-1.5" style={{ width: `${pct + failedPct}%`, background: '#ef4444', opacity: 0.6 }} />
+        )}
+      </div>
+      <span className="text-xs" style={{ color: '#6b7280' }}>{completed}/{total}</span>
+      {failed > 0 && (
+        <span className="text-xs" style={{ color: '#ef4444' }}>-{failed}</span>
+      )}
+    </div>
+  );
+}
+
+export function TaskTable({ items, onRefresh }: { items: Task[]; onRefresh?: () => void }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
   const router = useRouter();
@@ -66,7 +86,8 @@ export function TaskTable({ items }: { items: Task[] }) {
     try {
       await api.post('/api/v1/crawler/tasks/batch-delete', { task_ids: Array.from(selected) });
       setSelected(new Set());
-      router.refresh();
+      if (onRefresh) onRefresh();
+      else router.refresh();
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : '批量删除失败');
     } finally {
@@ -109,12 +130,13 @@ export function TaskTable({ items }: { items: Task[] }) {
             <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider" style={{ color: '#9ca3af' }}>进度</th>
             <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider" style={{ color: '#9ca3af' }}>状态</th>
             <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider" style={{ color: '#9ca3af' }}>创建时间</th>
+            <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider" style={{ color: '#9ca3af' }}>操作</th>
           </tr>
         </thead>
         <tbody>
           {items.length === 0 && (
             <tr>
-              <td colSpan={6} className="px-4 py-12 text-center text-sm" style={{ color: '#9ca3af' }}>
+              <td colSpan={7} className="px-4 py-12 text-center text-sm" style={{ color: '#9ca3af' }}>
                 暂无任务
               </td>
             </tr>
@@ -139,14 +161,11 @@ export function TaskTable({ items }: { items: Task[] }) {
                   {t.task_name || t.id.slice(0, 8)}
                 </Link>
               </td>
-              <td className="px-4 py-3" style={{ color: '#6b7280' }}>
-                {t.date_to ? `${t.target_date}~${t.date_to}` : t.target_date}
+              <td className="px-4 py-3 text-xs" style={{ color: '#6b7280' }}>
+                {t.date_to ? `${t.target_date} ~ ${t.date_to}` : (t.target_date || '-')}
               </td>
-              <td className="px-4 py-3" style={{ color: '#6b7280' }}>
-                {t.completed_urls} / {t.total_urls}
-                {t.failed_urls > 0 && (
-                  <span className="ml-2" style={{ color: '#ef4444' }}>失败 {t.failed_urls}</span>
-                )}
+              <td className="px-4 py-3">
+                <ProgressBar completed={t.completed_urls} total={t.total_urls} failed={t.failed_urls} />
               </td>
               <td className="px-4 py-3">
                 <span className={STATUS_BADGE[t.status] || 'badge-gray'}>
@@ -154,6 +173,15 @@ export function TaskTable({ items }: { items: Task[] }) {
                 </span>
               </td>
               <td className="px-4 py-3 text-xs" style={{ color: '#9ca3af' }}>{formatDate(t.created_at)}</td>
+              <td className="px-4 py-3">
+                <Link
+                  href={`/articles?task_id=${t.id}`}
+                  className="text-xs transition-colors"
+                  style={{ color: '#3b82f6' }}
+                >
+                  查看文章
+                </Link>
+              </td>
             </tr>
           ))}
         </tbody>

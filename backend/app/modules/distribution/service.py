@@ -1,6 +1,9 @@
 """周报生成与分发核心服务。"""
+import asyncio
 import logging
+import smtplib
 from datetime import date, timedelta
+from email.mime.text import MIMEText
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -122,8 +125,8 @@ def _get_adapter(channel_type: str) -> DistributionAdapter | None:
     return None
 
 
-async def dispatch_weekly_report():
-    """APScheduler 入口：生成并分发周报。"""
+async def dispatch_weekly_report(force: bool = False):
+    """APScheduler 入口：生成并分发周报。force=True 跳过幂等检查。"""
     from app.core.database import AsyncSessionLocal
     from app.models.distribution import DistributionConfig, DistributionLog
 
@@ -135,6 +138,14 @@ async def dispatch_weekly_report():
             report = await svc.generate_weekly_report(year_week)
         except Exception as e:
             logger.error("周报生成失败: %s", e)
+            # 记录生成失败日志
+            log_entry = DistributionLog(
+                report_week=year_week,
+                status="failed",
+                error_message=f"周报生成失败：{e!r}"[:500],
+            )
+            session.add(log_entry)
+            await session.commit()
             return
 
         result = await session.execute(
@@ -152,6 +163,19 @@ async def dispatch_weekly_report():
                 logger.warning("未知通道类型: %s", cfg.channel_type)
                 continue
 
+            # 幂等检查：同一 config + 同一周 + 已成功 → 跳过
+            if not force:
+                existing = await session.execute(
+                    select(DistributionLog).where(
+                        DistributionLog.config_id == cfg.id,
+                        DistributionLog.report_week == year_week,
+                        DistributionLog.status == "success",
+                    )
+                )
+                if existing.scalar_one_or_none():
+                    logger.info("周报已分发，跳过: %s (%s)", cfg.name, year_week)
+                    continue
+
             log_entry = DistributionLog(
                 config_id=cfg.id,
                 config_name=cfg.name,
@@ -164,14 +188,81 @@ async def dispatch_weekly_report():
                 category_count=report.stats.total_categories,
             )
 
-            try:
-                await adapter.send(report, cfg.config)
-                log_entry.status = "success"
-                logger.info("周报分发成功: %s (%s)", cfg.name, cfg.channel_type)
-            except Exception as e:
-                log_entry.error_message = str(e)[:500]
-                logger.error("周报分发失败: %s (%s): %s", cfg.name, cfg.channel_type, e)
+            # 内联重试：3 次，指数退避 2s/4s/8s
+            for attempt in range(3):
+                try:
+                    await adapter.send(report, cfg.config)
+                    log_entry.status = "success"
+                    logger.info("周报分发成功: %s (%s)", cfg.name, cfg.channel_type)
+                    break
+                except Exception as e:
+                    log_entry.error_message = str(e)[:500]
+                    if attempt < 2:
+                        wait = 2 ** (attempt + 1)
+                        logger.warning("周报分发失败，%d/3 次，等待 %ds: %s (%s): %s", attempt + 1, 3, wait, cfg.name, cfg.channel_type, e)
+                        await asyncio.sleep(wait)
+                    else:
+                        logger.error("周报分发失败（已重试 3 次）: %s (%s): %s", cfg.name, cfg.channel_type, e)
 
             session.add(log_entry)
 
         await session.commit()
+
+
+async def send_article_email(article: Article, config: dict) -> None:
+    """通过 SMTP 发送单篇文章邮件。config 为 DistributionConfig.config 字段。"""
+    summary = ""
+    keywords = ""
+    if article.ai_analysis:
+        summary = article.ai_analysis.summary or ""
+        keywords = ", ".join(article.ai_analysis.keywords or [])
+
+    html = f"""\
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family:-apple-system,sans-serif;padding:20px;background:#f5f5f5;">
+<div style="max-width:640px;margin:0 auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+<div style="background:#1a73e8;padding:20px;color:#fff;">
+  <h1 style="margin:0;font-size:18px;">{article.original_title}</h1>
+</div>
+<div style="padding:20px;">
+  <p style="font-size:13px;color:#666;margin:0 0 12px;">
+    {article.source_unit or '来源未知'} · {article.publish_date}
+  </p>
+  {f'<p style="font-size:14px;line-height:1.6;color:#333;margin:0 0 16px;">{summary}</p>' if summary else ''}
+  {f'<p style="font-size:12px;color:#999;">关键词：{keywords}</p>' if keywords else ''}
+  <p style="margin:20px 0 0;">
+    <a href="{article.original_link}" style="display:inline-block;background:#1a73e8;color:#fff;text-decoration:none;padding:10px 24px;border-radius:6px;font-size:14px;">查看原文 →</a>
+  </p>
+</div>
+<div style="padding:12px 20px;font-size:11px;color:#999;border-top:1px solid #eee;text-align:center;">
+  本邮件由拾讯系统自动发送
+</div>
+</div>
+</body>
+</html>"""
+
+    msg = MIMEText(html, "html", "utf-8")
+    msg["Subject"] = f"拾讯 - {article.original_title}"
+    msg["From"] = config.get("from_addr", config.get("smtp_user", ""))
+    to_addrs = config.get("to_addrs", [])
+    msg["To"] = ", ".join(to_addrs)
+
+    use_tls = config.get("use_tls", True)
+    smtp_host = config["smtp_host"]
+    smtp_port = config["smtp_port"]
+
+    def _send():
+        if use_tls:
+            with smtplib.SMTP_SSL(smtp_host, smtp_port) as server:
+                server.login(config["smtp_user"], config["smtp_pass"])
+                server.sendmail(config["smtp_user"], to_addrs, msg.as_string())
+        else:
+            with smtplib.SMTP(smtp_host, smtp_port) as server:
+                server.starttls()
+                server.login(config["smtp_user"], config["smtp_pass"])
+                server.sendmail(config["smtp_user"], to_addrs, msg.as_string())
+
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, _send)
