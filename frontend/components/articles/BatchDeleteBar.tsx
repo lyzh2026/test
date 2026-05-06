@@ -32,6 +32,8 @@ export function ArticleListClient({ items, total, limit, offset, prevHref, nextH
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState('');
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   function toggle(id: string) {
     const next = new Set(selected);
@@ -78,6 +80,35 @@ export function ArticleListClient({ items, total, limit, offset, prevHref, nextH
     } catch { }
   }
 
+  async function handleMergedExport(useTemplate: boolean) {
+    setExporting(true);
+    try {
+      const res = await fetch('/api/proxy/api/v1/articles/export/merged-doc', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ article_ids: Array.from(selected), use_template: useTemplate }),
+      });
+      if (!res.ok) {
+        throw new Error('导出失败');
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `拾讯文章合集_${new Date().toISOString().split('T')[0]}.docx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      // ignore
+    } finally {
+      setExporting(false);
+      setExportOpen(false);
+    }
+  }
+
   return (
     <>
       {/* Batch action bar */}
@@ -105,6 +136,13 @@ export function ArticleListClient({ items, total, limit, offset, prevHref, nextH
             style={{ background: '#ef4444', color: '#fcfcfc' }}
           >
             批量删除
+          </button>
+          <button
+            onClick={() => setExportOpen(true)}
+            disabled={selected.size === 0}
+            className="btn-secondary disabled:opacity-30"
+          >
+            合并导出
           </button>
           <button
             onClick={() => batchExportDoc(Array.from(selected))}
@@ -190,6 +228,37 @@ export function ArticleListClient({ items, total, limit, offset, prevHref, nextH
           下一页
         </a>
       </div>
+
+      {/* Export options modal */}
+      {exportOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" onClick={() => setExportOpen(false)}>
+          <div className="absolute inset-0 bg-black/20" />
+          <div
+            className="relative rounded-[16px] p-6 w-80"
+            style={{ background: '#fcfcfc', border: '1px solid #e5e7eb' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="text-sm font-medium" style={{ color: '#18181b' }}>合并导出</p>
+            <p className="text-sm mt-1 mb-5" style={{ color: '#9ca3af' }}>选择导出方式</p>
+            <div className="flex flex-col gap-3">
+              <button
+                onClick={() => handleMergedExport(false)}
+                disabled={exporting}
+                className="btn-secondary text-sm w-full"
+              >
+                {exporting ? '导出中…' : '普通导出'}
+              </button>
+              <button
+                onClick={() => handleMergedExport(true)}
+                disabled={exporting}
+                className="btn-primary text-sm w-full"
+              >
+                {exporting ? '导出中…' : '使用模板导出'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Confirmation modal */}
       {confirmOpen && (

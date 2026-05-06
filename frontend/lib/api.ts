@@ -44,6 +44,29 @@ async function apiRequest<T>(
   return body.data as T;
 }
 
+async function apiUpload<T>(path: string, formData: FormData): Promise<T> {
+  const url = path.startsWith('/') ? `/api/proxy${path}` : `/api/proxy/${path}`;
+  const res = await fetch(url, {
+    method: 'PUT',
+    body: formData,
+    cache: 'no-store',
+    credentials: 'include',
+  });
+  let body: ApiEnvelope<T>;
+  try {
+    body = (await res.json()) as ApiEnvelope<T>;
+  } catch {
+    throw new ApiError(res.status, res.statusText || 'invalid response');
+  }
+  if (!body || typeof body.code !== 'number') {
+    throw new ApiError(res.status, 'unexpected response');
+  }
+  if (body.code !== 0) {
+    throw new ApiError(body.code, body.message || 'error');
+  }
+  return body.data as T;
+}
+
 export const api = {
   get: <T>(p: string) => apiRequest<T>(p, { method: 'GET' }),
   post: <T>(p: string, payload?: unknown) =>
@@ -53,4 +76,5 @@ export const api = {
   patch: <T>(p: string, payload?: unknown) =>
     apiRequest<T>(p, { method: 'PATCH', body: payload ? JSON.stringify(payload) : undefined }),
   delete: <T>(p: string) => apiRequest<T>(p, { method: 'DELETE' }),
+  upload: apiUpload,
 };

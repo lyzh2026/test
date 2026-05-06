@@ -7,6 +7,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -99,6 +100,12 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="拾讯后端", version="0.1.0", lifespan=lifespan)
+
+# 静态文件（上传的模板等）
+import os
+_static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
+os.makedirs(os.path.join(_static_dir, "templates"), exist_ok=True)
+app.mount("/static", StaticFiles(directory=_static_dir), name="static")
 
 
 @app.middleware("http")

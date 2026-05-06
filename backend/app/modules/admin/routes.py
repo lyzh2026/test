@@ -1,7 +1,8 @@
 """白名单 CRUD + 系统设置 API。"""
+import os
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, UploadFile, File
 from openai import AsyncOpenAI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +12,9 @@ from app.dependencies.auth import current_admin
 from app.models.allowed_domain import AllowedDomain
 from app.models.system_config import SystemConfig
 from app.utils.response import error, success
+
+TEMPLATE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "static", "templates")
+TEMPLATE_PATH = os.path.join(TEMPLATE_DIR, "export_template.docx")
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
@@ -205,3 +209,53 @@ async def test_ai_connection(
         return success({"ok": True, "model": model, "reply": reply}, request=request)
     except Exception as e:
         return error(2002, f"连接测试失败：{e!r}", http_status=502, request=request)
+
+
+# ── 导出模板管理 ──────────────────────────────────────────────
+
+
+@router.get("/settings/export-template")
+async def get_export_template_status(
+    request: Request,
+    _: object = Depends(current_admin),
+):
+    """查询当前是否已上传 Word 导出模板。"""
+    exists = os.path.isfile(TEMPLATE_PATH)
+    stat = os.stat(TEMPLATE_PATH) if exists else None
+    return success({
+        "exists": exists,
+        "filename": "export_template.docx" if exists else None,
+        "uploaded_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat() if stat else None,
+    }, request=request)
+
+
+@router.put("/settings/export-template")
+async def upload_export_template(
+    request: Request,
+    _: object = Depends(current_admin),
+    file: UploadFile = File(...),
+):
+    """上传 .docx 模板用于合并导出。"""
+    if not file.filename or not file.filename.lower().endswith(".docx"):
+        return error(1001, "仅支持 .docx 文件", http_status=400, request=request)
+
+    os.makedirs(TEMPLATE_DIR, exist_ok=True)
+    content = await file.read()
+    if len(content) > 10 * 1024 * 1024:
+        return error(1001, "模板文件不能超过 10MB", http_status=400, request=request)
+
+    with open(TEMPLATE_PATH, "wb") as f:
+        f.write(content)
+
+    return success({"ok": True, "filename": file.filename}, request=request)
+
+
+@router.delete("/settings/export-template")
+async def delete_export_template(
+    request: Request,
+    _: object = Depends(current_admin),
+):
+    """删除已上传的导出模板。"""
+    if os.path.isfile(TEMPLATE_PATH):
+        os.remove(TEMPLATE_PATH)
+    return success({"ok": True}, request=request)

@@ -432,3 +432,24 @@ async def update_article_categories(
 
     await session.commit()
     return success({"categories": categories}, request=request)
+
+
+@router.post("/articles/export/merged-doc")
+async def merged_export(
+    payload: dict,
+    request: Request,
+    _: object = Depends(current_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """合并导出多篇文章为一份 Word 文档。"""
+    article_ids = payload.get("article_ids", [])
+    use_template = payload.get("use_template", False)
+
+    if not article_ids or not isinstance(article_ids, list):
+        return error(1001, "article_ids 必须为非空数组", http_status=400, request=request)
+    if len(article_ids) > 100:
+        return error(1001, "单次最多导出 100 篇文章", http_status=400, request=request)
+
+    from app.modules.articles.docx_export import export_merged_doc
+    return await export_merged_doc(article_ids, use_template, session)
+

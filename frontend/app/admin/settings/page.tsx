@@ -26,6 +26,12 @@ const PRESET_LABELS: Record<string, string> = {
 };
 
 export default function SettingsPage() {
+type TemplateStatus = {
+  exists: boolean;
+  filename: string | null;
+  uploaded_at: string | null;
+};
+
   const [provider, setProvider] = useState('kimi');
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
@@ -36,6 +42,8 @@ export default function SettingsPage() {
   const [testResult, setTestResult] = useState<string | null>(null);
   const [testOk, setTestOk] = useState<boolean | null>(null);
   const [saved, setSaved] = useState(false);
+  const [template, setTemplate] = useState<TemplateStatus | null>(null);
+  const [uploading, setUploading] = useState(false);
   const { toast } = useToast();
 
   const fetchConfig = useCallback(async () => {
@@ -48,12 +56,22 @@ export default function SettingsPage() {
       setModel(data.model || '');
     } catch {
       // ignore
-    } finally {
-      setLoading(false);
     }
   }, []);
 
-  useEffect(() => { fetchConfig(); }, [fetchConfig]);
+  const fetchTemplate = useCallback(async () => {
+    try {
+      const data = await api.get<TemplateStatus>('/api/v1/admin/settings/export-template');
+      setTemplate(data);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchConfig();
+    fetchTemplate();
+  }, [fetchConfig, fetchTemplate]);
 
   function applyPreset(key: string) {
     setProvider(key);
@@ -98,6 +116,39 @@ export default function SettingsPage() {
       setTestResult(e instanceof ApiError ? e.message : '测试失败');
     } finally {
       setTesting(false);
+    }
+  }
+
+  async function handleTemplateUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.docx')) {
+      toast('仅支持 .docx 文件', 'error');
+      return;
+    }
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      await api.upload('/api/v1/admin/settings/export-template', formData);
+      toast('模板上传成功', 'success');
+      fetchTemplate();
+    } catch (err: unknown) {
+      toast(err instanceof ApiError ? err.message : '上传失败', 'error');
+    } finally {
+      setUploading(false);
+      // 清空 input 以允许重新选择同一文件
+      e.target.value = '';
+    }
+  }
+
+  async function handleDeleteTemplate() {
+    try {
+      await api.delete('/api/v1/admin/settings/export-template');
+      toast('模板已删除', 'success');
+      fetchTemplate();
+    } catch (err: unknown) {
+      toast(err instanceof ApiError ? err.message : '删除失败', 'error');
     }
   }
 
@@ -201,6 +252,61 @@ export default function SettingsPage() {
           <p className="font-medium mb-1" style={{ color: '#6b7280' }}>支持的模型</p>
           <p>所有兼容 OpenAI Chat Completions API 的模型均可使用，包括 Kimi (Moonshot)、OpenAI、DeepSeek、通义千问等。</p>
         </div>
+      </div>
+
+      {/* 导出模板配置 */}
+      <div className="card p-6 mt-6" style={{ maxWidth: 640 }}>
+        <h2 className="text-base font-medium mb-5" style={{ color: '#18181b' }}>导出模板</h2>
+        <p className="text-xs mb-4" style={{ color: '#9ca3af' }}>
+          上传 Word 模板用于合并导出。模板中可使用 Jinja2 占位符（{'{{'} article.title {'}}'} 等）。
+        </p>
+
+        {template?.exists ? (
+          <div className="space-y-3">
+            <div className="flex items-center gap-3 text-sm" style={{ color: '#18181b' }}>
+              <span className="badge-green">已上传</span>
+              <span>{template.filename}</span>
+              {template.uploaded_at && (
+                <span className="text-xs" style={{ color: '#9ca3af' }}>
+                  {new Date(template.uploaded_at).toLocaleString()}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-3">
+              <label className="btn-secondary text-sm cursor-pointer">
+                {uploading ? '上传中…' : '替换模板'}
+                <input
+                  type="file"
+                  accept=".docx"
+                  className="hidden"
+                  onChange={handleTemplateUpload}
+                  disabled={uploading}
+                />
+              </label>
+              <button
+                onClick={handleDeleteTemplate}
+                className="rounded-[20px] px-4 py-1.5 text-sm font-medium transition-all"
+                style={{ background: '#ef4444', color: '#fcfcfc' }}
+              >
+                删除模板
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-sm" style={{ color: '#9ca3af' }}>尚未上传模板</p>
+            <label className="btn-secondary text-sm cursor-pointer">
+              {uploading ? '上传中…' : '上传模板'}
+              <input
+                type="file"
+                accept=".docx"
+                className="hidden"
+                onChange={handleTemplateUpload}
+                disabled={uploading}
+              />
+            </label>
+          </div>
+        )}
       </div>
     </main>
   );
