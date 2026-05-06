@@ -107,7 +107,6 @@ async def submit_task(
     date_to: date | None = None,
     task_name: str | None,
     callback_url: str | None,
-    priority: int,
 ) -> CrawlerTask:
     """前端提交：URL 校验 → 创建 task（立即可见）→ 后台 discovery + crawl。
 
@@ -173,7 +172,6 @@ async def submit_task(
         failed_details=failed_details,
         status="pending",
         callback_url=callback_url,
-        priority=priority,
     )
     session.add(task)
     await session.commit()

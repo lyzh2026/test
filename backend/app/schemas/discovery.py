@@ -17,7 +17,6 @@ class DiscoveryTaskCreate(BaseModel):
     target_date: date
     date_to: date | None = None
     task_name: str | None = None
-    priority: int = Field(default=1, ge=1, le=3)
     max_depth: int = Field(default=2, ge=1, le=3)
     max_links: int = Field(default=50, ge=1, le=200)
     enable_pagination: bool = Field(default=True)

@@ -25,7 +25,6 @@ class CrawlerTask(Base):
 
     status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
     callback_url: Mapped[str | None] = mapped_column(Text)
-    priority: Mapped[int] = mapped_column(Integer, default=1)
 
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

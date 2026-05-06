@@ -19,7 +19,6 @@ type Task = {
   failed_urls: number;
   failed_details: { url: string; code: number; reason: string; stage?: string }[];
   status: string;
-  priority: number;
   callback_url: string | null;
   started_at: string | null;
   completed_at: string | null;
@@ -71,7 +70,7 @@ export default async function TaskDetailPage({ params }: { params: { id: string 
         <div className="flex items-start justify-between mb-6">
           <div>
             <h1 className="text-lg font-semibold" style={{ color: '#18181b' }}>{task.task_name || task.id}</h1>
-            <p className="mt-1 text-sm" style={{ color: '#9ca3af' }}>{task.date_to ? `${task.target_date} ~ ${task.date_to}` : task.target_date} · 优先级 {task.priority}</p>
+            <p className="mt-1 text-sm" style={{ color: '#9ca3af' }}>{task.date_to ? `${task.target_date} ~ ${task.date_to}` : task.target_date}</p>
           </div>
           <div className="flex items-center gap-3">
             <span className={STATUS_BADGE[task.status] || 'badge-gray'}>

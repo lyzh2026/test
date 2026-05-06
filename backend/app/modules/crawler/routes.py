@@ -29,7 +29,6 @@ def _serialize_task(task) -> dict:
         "failed_urls": task.failed_urls,
         "failed_details": task.failed_details or [],
         "status": task.status,
-        "priority": task.priority,
         "callback_url": task.callback_url,
         "started_at": task.started_at.isoformat() if task.started_at else None,
         "completed_at": task.completed_at.isoformat() if task.completed_at else None,
@@ -53,7 +52,6 @@ async def create_task(
             date_to=payload.date_to,
             task_name=payload.task_name,
             callback_url=payload.callback_url,
-            priority=payload.priority,
         )
     except URLValidationError as e:
         return error(e.code, e.message, http_status=400, request=request)

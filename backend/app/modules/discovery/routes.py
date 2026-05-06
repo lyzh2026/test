@@ -69,7 +69,6 @@ async def create_discovery_task(
             date_to=payload.date_to,
             task_name=payload.task_name,
             callback_url=None,
-            priority=payload.priority,
         )
     except Exception as e:
         return error(

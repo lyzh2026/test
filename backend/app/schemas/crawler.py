@@ -12,7 +12,6 @@ class CrawlerTaskCreate(BaseModel):
     url_list: list[str] = Field(default=[], max_length=100)
     direct_urls: list[str] = Field(default=[], max_length=100)
     callback_url: HttpUrl | None = None
-    priority: int = 1
 
     @model_validator(mode="after")
     def _require_at_least_one_url(self):

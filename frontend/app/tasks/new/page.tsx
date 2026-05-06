@@ -20,7 +20,6 @@ export default function NewTaskPage() {
   const [dateTo, setDateTo] = useState(todayISO());
   const [directUrlText, setDirectUrlText] = useState('');
   const [entryUrlText, setEntryUrlText] = useState('');
-  const [priority, setPriority] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -84,7 +83,6 @@ export default function NewTaskPage() {
         target_date: dateFrom,
         date_to: dateTo !== dateFrom ? dateTo : null,
         task_name: taskName || null,
-        priority,
       });
       router.push(`/tasks/${data.task_id}`);
     } catch (err) {
@@ -148,18 +146,6 @@ export default function NewTaskPage() {
               onChange={(e) => setDateTo(e.target.value)}
               required
             />
-          </div>
-          <div>
-            <label className="mb-1.5 block text-sm" style={{ color: '#6b7280' }}>优先级</label>
-            <select
-              className="input"
-              value={priority}
-              onChange={(e) => setPriority(parseInt(e.target.value, 10))}
-            >
-              <option value={1}>普通 (1)</option>
-              <option value={2}>较高 (2)</option>
-              <option value={3}>最高 (3)</option>
-            </select>
           </div>
         </div>
 
