@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { api, ApiError } from '@/lib/api';
+import { useToast } from '@/components/ui/Toast';
 
 type ScheduledCrawl = {
   id: string;
@@ -46,6 +47,7 @@ export default function ScheduledCrawlsPage() {
   const [formEnabled, setFormEnabled] = useState(true);
 
   const [emailConfigs, setEmailConfigs] = useState<DistConfig[]>([]);
+  const { toast, confirm } = useToast();
 
   const fetchList = useCallback(async () => {
     setLoading(true);
@@ -119,7 +121,7 @@ export default function ScheduledCrawlsPage() {
       setFormOpen(false);
       fetchList();
     } catch (e: unknown) {
-      alert(e instanceof ApiError ? e.message : '保存失败');
+      toast(e instanceof ApiError ? e.message : '保存失败', 'error');
     }
   }
 
@@ -128,27 +130,27 @@ export default function ScheduledCrawlsPage() {
       await api.post(`/api/v1/crawler/scheduled-crawls/${id}/toggle`);
       fetchList();
     } catch (e: unknown) {
-      alert(e instanceof ApiError ? e.message : '操作失败');
+      toast(e instanceof ApiError ? e.message : '操作失败', 'error');
     }
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('确认删除此定时任务？')) return;
+    if (!await confirm('确认删除此定时任务？')) return;
     try {
       await api.delete(`/api/v1/crawler/scheduled-crawls/${id}`);
       fetchList();
     } catch (e: unknown) {
-      alert(e instanceof ApiError ? e.message : '删除失败');
+      toast(e instanceof ApiError ? e.message : '删除失败', 'error');
     }
   }
 
   async function handleRunNow(id: string) {
-    if (!confirm('确认立即执行一次？')) return;
+    if (!await confirm('确认立即执行一次？')) return;
     try {
       await api.post(`/api/v1/crawler/scheduled-crawls/${id}/run`);
-      alert('已触发执行，将在后台完成爬取并发送邮件');
+      toast('已触发执行，将在后台完成爬取并发送邮件', 'success');
     } catch (e: unknown) {
-      alert(e instanceof ApiError ? e.message : '触发失败');
+      toast(e instanceof ApiError ? e.message : '触发失败', 'error');
     }
   }
 

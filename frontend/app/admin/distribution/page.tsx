@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { api, ApiError } from '@/lib/api';
+import { useToast } from '@/components/ui/Toast';
 
 type DistConfig = {
   id: string;
@@ -24,6 +25,7 @@ export default function DistributionPage() {
   const [formOpen, setFormOpen] = useState(false);
 
   const [sending, setSending] = useState(false);
+  const { toast, confirm } = useToast();
 
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -122,7 +124,7 @@ export default function DistributionPage() {
       setFormOpen(false);
       fetchList();
     } catch (e: unknown) {
-      alert(e instanceof ApiError ? e.message : '保存失败');
+      toast(e instanceof ApiError ? e.message : '保存失败', 'error');
     }
   }
 
@@ -131,17 +133,17 @@ export default function DistributionPage() {
       await api.patch(`/api/v1/distribution/configs/${id}/toggle`);
       fetchList();
     } catch (e: unknown) {
-      alert(e instanceof ApiError ? e.message : '操作失败');
+      toast(e instanceof ApiError ? e.message : '操作失败', 'error');
     }
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('确认删除此分发配置？')) return;
+    if (!await confirm('确认删除此分发配置？')) return;
     try {
       await api.delete(`/api/v1/distribution/configs/${id}`);
       fetchList();
     } catch (e: unknown) {
-      alert(e instanceof ApiError ? e.message : '删除失败');
+      toast(e instanceof ApiError ? e.message : '删除失败', 'error');
     }
   }
 
@@ -155,7 +157,7 @@ export default function DistributionPage() {
       setPreviewContent(typeof data.content === 'string' ? data.content : JSON.stringify(data.content, null, 2));
     } catch (e: unknown) {
       setPreviewContent(null);
-      alert(e instanceof ApiError ? e.message : '预览加载失败');
+      toast(e instanceof ApiError ? e.message : '预览加载失败', 'error');
     } finally {
       setPreviewLoading(false);
     }
@@ -172,13 +174,13 @@ export default function DistributionPage() {
           <button
             onClick={async () => {
               const msg = '确认立即发送本周周报？\n\n点击"确定"正常发送（已成功的通道会跳过）。\n如需强制补发所有通道，请取消后点击"强制发送"。';
-              if (!confirm(msg)) return;
+              if (!await confirm(msg)) return;
               setSending(true);
               try {
                 await api.post('/api/v1/distribution/trigger');
-                alert('周报分发已触发（已成功的通道已跳过）');
+                toast('周报分发已触发（已成功的通道已跳过）', 'success');
               } catch (e: unknown) {
-                alert(e instanceof ApiError ? e.message : '发送失败');
+                toast(e instanceof ApiError ? e.message : '发送失败', 'error');
               } finally {
                 setSending(false);
               }
@@ -190,13 +192,13 @@ export default function DistributionPage() {
           </button>
           <button
             onClick={async () => {
-              if (!confirm('确认强制补发本周周报？\n将忽略幂等检查，所有通道都会重新发送。')) return;
+              if (!await confirm('确认强制补发本周周报？\n将忽略幂等检查，所有通道都会重新发送。')) return;
               setSending(true);
               try {
                 await api.post('/api/v1/distribution/trigger?force=true');
-                alert('周报强制补发已触发');
+                toast('周报强制补发已触发', 'success');
               } catch (e: unknown) {
-                alert(e instanceof ApiError ? e.message : '发送失败');
+                toast(e instanceof ApiError ? e.message : '发送失败', 'error');
               } finally {
                 setSending(false);
               }

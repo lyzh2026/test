@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { api, ApiError } from '@/lib/api';
+import { useToast } from '@/components/ui/Toast';
 
 type DistConfig = {
   id: string;
@@ -14,6 +15,7 @@ export function EmailSendButton({ articleId, compact, onDone }: { articleId: str
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
+  const { toast } = useToast();
 
   useEffect(() => {
     api.get<{ items: DistConfig[] }>('/api/v1/distribution/configs/email-enabled')
@@ -26,10 +28,10 @@ export function EmailSendButton({ articleId, compact, onDone }: { articleId: str
     try {
       await api.post(`/api/v1/distribution/send-article/${articleId}`, { config_id: cfg.id });
       setShowPicker(false);
-      alert(`已发送至 ${cfg.config.to_addrs?.join(', ') || cfg.name}`);
+      toast(`已发送至 ${cfg.config.to_addrs?.join(', ') || cfg.name}`, 'success');
       onDone?.();
     } catch (e: unknown) {
-      alert(e instanceof ApiError ? e.message : '发送失败');
+      toast(e instanceof ApiError ? e.message : '发送失败', 'error');
     } finally {
       setSending(false);
     }

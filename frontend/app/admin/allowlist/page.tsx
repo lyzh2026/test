@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { api, ApiError } from '@/lib/api';
+import { useToast } from '@/components/ui/Toast';
 
 type AllowItem = {
   id: string;
@@ -24,6 +25,7 @@ export default function AllowlistPage() {
   const [formMode, setFormMode] = useState('exact');
   const [formEnabled, setFormEnabled] = useState(true);
   const [formRemark, setFormRemark] = useState('');
+  const { toast, confirm } = useToast();
 
   const fetchList = useCallback(async () => {
     setLoading(true);
@@ -78,17 +80,17 @@ export default function AllowlistPage() {
       setFormOpen(false);
       fetchList();
     } catch (e: unknown) {
-      alert(e instanceof ApiError ? e.message : '保存失败');
+      toast(e instanceof ApiError ? e.message : '保存失败', 'error');
     }
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('确认删除此白名单条目？')) return;
+    if (!await confirm('确认删除此白名单条目？')) return;
     try {
       await api.delete(`/api/v1/admin/allowlist/${id}`);
       fetchList();
     } catch (e: unknown) {
-      alert(e instanceof ApiError ? e.message : '删除失败');
+      toast(e instanceof ApiError ? e.message : '删除失败', 'error');
     }
   }
 

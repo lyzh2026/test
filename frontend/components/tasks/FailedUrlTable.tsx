@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
+import { useToast } from '@/components/ui/Toast';
 
 type FailedDetail = {
   url: string;
@@ -38,6 +39,7 @@ export function FailedUrlTable({
   const [browsing, setBrowsing] = useState(false);
   const [result, setResult] = useState<BrowseResult | null>(null);
   const router = useRouter();
+  const { toast, confirm } = useToast();
 
   const canBrowse = taskStatus === 'partial_failed' || taskStatus === 'failed';
 
@@ -59,7 +61,7 @@ export function FailedUrlTable({
   }
 
   async function handleAIBrowse() {
-    if (!confirm(`确认使用 AI 浏览选中的 ${selected.size} 个 URL？`)) return;
+    if (!await confirm(`确认使用 AI 浏览选中的 ${selected.size} 个 URL？`)) return;
     setBrowsing(true);
     setResult(null);
     try {
@@ -71,7 +73,7 @@ export function FailedUrlTable({
       setSelected(new Set());
       router.refresh();
     } catch (e: unknown) {
-      alert(e instanceof Error ? e.message : 'AI 浏览失败');
+      toast(e instanceof Error ? e.message : 'AI 浏览失败', 'error');
     } finally {
       setBrowsing(false);
     }

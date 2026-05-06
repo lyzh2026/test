@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
+import { useToast } from '@/components/ui/Toast';
 
 type Task = {
   id: string;
@@ -60,6 +61,7 @@ export function TaskTable({ items, onRefresh }: { items: Task[]; onRefresh?: () 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
   const router = useRouter();
+  const { toast, confirm } = useToast();
 
   const allSelected = items.length > 0 && selected.size === items.length;
 
@@ -81,7 +83,7 @@ export function TaskTable({ items, onRefresh }: { items: Task[]; onRefresh?: () 
   }
 
   async function handleBatchDelete() {
-    if (!confirm(`确认删除选中的 ${selected.size} 个任务？此操作不可撤销。`)) return;
+    if (!await confirm(`确认删除选中的 ${selected.size} 个任务？此操作不可撤销。`)) return;
     setDeleting(true);
     try {
       await api.post('/api/v1/crawler/tasks/batch-delete', { task_ids: Array.from(selected) });
@@ -89,7 +91,7 @@ export function TaskTable({ items, onRefresh }: { items: Task[]; onRefresh?: () 
       if (onRefresh) onRefresh();
       else router.refresh();
     } catch (e: unknown) {
-      alert(e instanceof Error ? e.message : '批量删除失败');
+      toast(e instanceof Error ? e.message : '批量删除失败', 'error');
     } finally {
       setDeleting(false);
     }

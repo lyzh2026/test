@@ -3,21 +3,23 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
+import { useToast } from '@/components/ui/Toast';
 
 export function RetryButton({ taskId, status }: { taskId: string; status: string }) {
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+  const { toast, confirm } = useToast();
 
   if (status !== 'partial_failed' && status !== 'failed') return null;
 
   async function handleRetry() {
-    if (!confirm('确认重试该任务的所有失败 URL？')) return;
+    if (!await confirm('确认重试该任务的所有失败 URL？')) return;
     setLoading(true);
     try {
       await api.post(`/api/v1/crawler/task/${taskId}/retry`);
       router.refresh();
     } catch (e: unknown) {
-      alert(e instanceof Error ? e.message : '重试失败');
+      toast(e instanceof Error ? e.message : '重试失败', 'error');
     } finally {
       setLoading(false);
     }

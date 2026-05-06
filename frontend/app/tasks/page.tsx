@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { api, ApiError } from '@/lib/api';
 import { TaskTable } from '@/components/tasks/TaskTable';
+import { useToast } from '@/components/ui/Toast';
 
 type Task = {
   id: string;
@@ -212,6 +213,7 @@ function ScheduledTasksTab() {
   const [formConfigId, setFormConfigId] = useState('');
   const [formEnabled, setFormEnabled] = useState(true);
   const [emailConfigs, setEmailConfigs] = useState<DistConfig[]>([]);
+  const { toast, confirm } = useToast();
 
   const fetchList = useCallback(async () => {
     setLoading(true);
@@ -259,24 +261,24 @@ function ScheduledTasksTab() {
         await api.post('/api/v1/crawler/scheduled-crawls', payload);
       }
       setFormOpen(false); fetchList();
-    } catch (e: unknown) { alert(e instanceof ApiError ? e.message : '保存失败'); }
+    } catch (e: unknown) { toast(e instanceof ApiError ? e.message : '保存失败', 'error'); }
   }
 
   async function handleToggle(id: string) {
     try { await api.post(`/api/v1/crawler/scheduled-crawls/${id}/toggle`); fetchList(); }
-    catch (e: unknown) { alert(e instanceof ApiError ? e.message : '操作失败'); }
+    catch (e: unknown) { toast(e instanceof ApiError ? e.message : '操作失败', 'error'); }
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('确认删除此定时任务？')) return;
+    if (!await confirm('确认删除此定时任务？')) return;
     try { await api.delete(`/api/v1/crawler/scheduled-crawls/${id}`); fetchList(); }
-    catch (e: unknown) { alert(e instanceof ApiError ? e.message : '删除失败'); }
+    catch (e: unknown) { toast(e instanceof ApiError ? e.message : '删除失败', 'error'); }
   }
 
   async function handleRunNow(id: string) {
-    if (!confirm('确认立即执行一次？')) return;
-    try { await api.post(`/api/v1/crawler/scheduled-crawls/${id}/run`); alert('已触发执行'); }
-    catch (e: unknown) { alert(e instanceof ApiError ? e.message : '触发失败'); }
+    if (!await confirm('确认立即执行一次？')) return;
+    try { await api.post(`/api/v1/crawler/scheduled-crawls/${id}/run`); toast('已触发执行', 'success'); }
+    catch (e: unknown) { toast(e instanceof ApiError ? e.message : '触发失败', 'error'); }
   }
 
   return (

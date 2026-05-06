@@ -3,6 +3,7 @@ import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 import { Noto_Sans_SC } from 'next/font/google';
 import { PageShell } from '@/components/layout/PageShell';
+import { ToastProvider } from '@/components/ui/Toast';
 
 const notoSansSC = Noto_Sans_SC({
   subsets: ['latin'],
@@ -19,7 +20,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="zh-CN">
       <body className={notoSansSC.className}>
-        <PageShell>{children}</PageShell>
+        <ToastProvider><PageShell>{children}</PageShell></ToastProvider>
       </body>
     </html>
   );

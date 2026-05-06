@@ -93,10 +93,6 @@ function LoginForm() {
           >
             {loading ? '登录中…' : '登录'}
           </button>
-
-          <p className="text-xs text-center text-gray-400">
-            默认账户 admin / admin123
-          </p>
         </form>
       </div>
     </div>

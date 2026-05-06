@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { api, ApiError } from '@/lib/api';
+import { useToast } from '@/components/ui/Toast';
 
 type AiConfig = {
   provider: string;
@@ -35,6 +36,7 @@ export default function SettingsPage() {
   const [testResult, setTestResult] = useState<string | null>(null);
   const [testOk, setTestOk] = useState<boolean | null>(null);
   const [saved, setSaved] = useState(false);
+  const { toast } = useToast();
 
   const fetchConfig = useCallback(async () => {
     setLoading(true);
@@ -77,7 +79,7 @@ export default function SettingsPage() {
       setApiKey('');
       setTimeout(() => setSaved(false), 3000);
     } catch (e: unknown) {
-      alert(e instanceof ApiError ? e.message : '保存失败');
+      toast(e instanceof ApiError ? e.message : '保存失败', 'error');
     } finally {
       setSaving(false);
     }

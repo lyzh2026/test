@@ -3,21 +3,23 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
+import { useToast } from '@/components/ui/Toast';
 
 export function CancelButton({ taskId, status }: { taskId: string; status: string }) {
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+  const { toast, confirm } = useToast();
 
   if (status !== 'running' && status !== 'pending') return null;
 
   async function handleCancel() {
-    if (!confirm('确认取消此任务？')) return;
+    if (!await confirm('确认取消此任务？')) return;
     setLoading(true);
     try {
       await api.post(`/api/v1/crawler/task/${taskId}/cancel`);
       router.refresh();
     } catch (e: unknown) {
-      alert(e instanceof Error ? e.message : '取消失败');
+      toast(e instanceof Error ? e.message : '取消失败', 'error');
     } finally {
       setLoading(false);
     }

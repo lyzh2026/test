@@ -3,21 +3,23 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
+import { useToast } from '@/components/ui/Toast';
 
 export function ReanalyzeButton({ articleId, status }: { articleId: string; status: string }) {
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+  const { toast, confirm } = useToast();
 
   if (status !== 'failed_retryable' && status !== 'failed_permanent') return null;
 
   async function handleReanalyze() {
-    if (!confirm('确认重新分析此文章？')) return;
+    if (!await confirm('确认重新分析此文章？')) return;
     setLoading(true);
     try {
       await api.post(`/api/v1/articles/${articleId}/reanalyze`);
       router.refresh();
     } catch (e: unknown) {
-      alert(e instanceof Error ? e.message : '重新分析失败');
+      toast(e instanceof Error ? e.message : '重新分析失败', 'error');
     } finally {
       setLoading(false);
     }
