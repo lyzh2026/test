@@ -43,6 +43,7 @@ export default function NewTaskPage() {
   const [taskName, setTaskName] = useState('');
   const [dateFrom, setDateFrom] = useState(todayISO());
   const [dateTo, setDateTo] = useState(todayISO());
+  const [noDateLimit, setNoDateLimit] = useState(false);
   const [directUrlText, setDirectUrlText] = useState('');
   const [entryUrlText, setEntryUrlText] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -123,8 +124,8 @@ export default function NewTaskPage() {
       const data = await api.post<CreateResp>('/api/v1/crawler/task', {
         url_list,
         direct_urls,
-        target_date: dateFrom,
-        date_to: dateTo !== dateFrom ? dateTo : null,
+        target_date: noDateLimit ? '1970-01-01' : dateFrom,
+        date_to: noDateLimit ? '2099-12-31' : (dateTo !== dateFrom ? dateTo : null),
         task_name: taskName || null,
       });
       router.push(`/tasks/${data.task_id}`);
@@ -242,9 +243,10 @@ export default function NewTaskPage() {
             <input
               type="date"
               className="input"
-              value={dateFrom}
+              value={noDateLimit ? '' : dateFrom}
               onChange={(e) => setDateFrom(e.target.value)}
-              required
+              disabled={noDateLimit}
+              required={!noDateLimit}
             />
           </div>
           <div>
@@ -252,10 +254,26 @@ export default function NewTaskPage() {
             <input
               type="date"
               className="input"
-              value={dateTo}
+              value={noDateLimit ? '' : dateTo}
               onChange={(e) => setDateTo(e.target.value)}
-              required
+              disabled={noDateLimit}
+              required={!noDateLimit}
             />
+          </div>
+          <div className="flex items-end">
+            <button
+              type="button"
+              onClick={() => setNoDateLimit(!noDateLimit)}
+              className="px-4 py-2.5 text-sm rounded-lg transition-all"
+              style={{
+                background: noDateLimit ? '#3b82f6' : '#f3f4f6',
+                color: noDateLimit ? '#fff' : '#6b7280',
+                border: '1px solid',
+                borderColor: noDateLimit ? '#3b82f6' : '#e5e7eb',
+              }}
+            >
+              无日期限制
+            </button>
           </div>
         </div>
 
