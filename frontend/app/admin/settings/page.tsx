@@ -111,7 +111,7 @@ type TemplateStatus = {
       });
       setSaved(true);
       setApiKey('');
-      setTimeout(() => setSaved(false), 3000);
+      setTimeout(() => setSaved(false), 2000);
     } catch (e: unknown) {
       toast(e instanceof ApiError ? e.message : '保存失败', 'error');
     } finally {
@@ -279,9 +279,6 @@ type TemplateStatus = {
           <button onClick={handleTest} disabled={testing} className="btn-secondary">
             {testing ? '测试中…' : '测试连接'}
           </button>
-          {saved && (
-            <span className="text-xs" style={{ color: '#22c55e' }}>已保存</span>
-          )}
         </div>
 
         {testResult && (
@@ -412,6 +409,15 @@ type TemplateStatus = {
         <DistributionPanel />
       </div>
       </div>
+
+      {/* 保存成功提示 */}
+      {saved && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none animate-fade-in">
+          <div className="px-6 py-3 rounded-xl shadow-lg text-sm font-medium" style={{ background: '#22c55e', color: '#fff' }}>
+            保存成功
+          </div>
+        </div>
+      )}
     </main>
   );
 }

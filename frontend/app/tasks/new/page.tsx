@@ -417,6 +417,7 @@ function ScheduledTaskForm() {
   const [formConfigId, setFormConfigId] = useState('');
   const [formEnabled, setFormEnabled] = useState(true);
   const [allConfigs, setAllConfigs] = useState<DistConfig[]>([]);
+  const [configsLoading, setConfigsLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const { toast } = useToast();
   const router = useRouter();
@@ -426,10 +427,12 @@ function ScheduledTaskForm() {
   const [showScheduledHistory, setShowScheduledHistory] = useState(false);
 
   const fetchConfigs = useCallback(async () => {
+    setConfigsLoading(true);
     try {
       const data = await api.get<{ items: DistConfig[] }>('/api/v1/distribution/configs');
       setAllConfigs(data.items.filter(c => c.enabled));
     } catch { /* ignore */ }
+    finally { setConfigsLoading(false); }
   }, []);
 
   useEffect(() => {
@@ -528,7 +531,7 @@ function ScheduledTaskForm() {
             <option value="">请选择</option>
             {allConfigs.map(c => <option key={c.id} value={c.id}>{c.name}（{CHANNEL_LABELS[c.channel_type] || c.channel_type}）</option>)}
           </select>
-          {allConfigs.length === 0 && (
+          {!configsLoading && allConfigs.length === 0 && (
             <p className="mt-1 text-xs" style={{ color: '#ef4444' }}>
               暂无可用通道，请先在设置页分发配置中添加
             </p>

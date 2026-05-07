@@ -52,6 +52,7 @@ export default function ScheduledCrawlsPage() {
   const [formEnabled, setFormEnabled] = useState(true);
 
   const [allConfigs, setAllConfigs] = useState<DistConfig[]>([]);
+  const [configsLoading, setConfigsLoading] = useState(true);
   const { toast, confirm } = useToast();
 
   const fetchList = useCallback(async () => {
@@ -67,12 +68,14 @@ export default function ScheduledCrawlsPage() {
   }, []);
 
   const fetchConfigs = useCallback(async () => {
+    setConfigsLoading(true);
     try {
       const data = await api.get<{ items: DistConfig[] }>('/api/v1/distribution/configs');
       setAllConfigs(data.items.filter(c => c.enabled));
     } catch {
       // ignore
     }
+    finally { setConfigsLoading(false); }
   }, []);
 
   useEffect(() => { fetchList(); fetchConfigs(); }, [fetchList, fetchConfigs]);
@@ -269,7 +272,7 @@ export default function ScheduledCrawlsPage() {
                     <option key={c.id} value={c.id}>{c.name}（{CHANNEL_LABELS[c.channel_type] || c.channel_type}）</option>
                   ))}
                 </select>
-                {allConfigs.length === 0 && (
+                {!configsLoading && allConfigs.length === 0 && (
                   <p className="mt-1 text-xs" style={{ color: '#ef4444' }}>暂无可用通道，请先在分发配置中添加</p>
                 )}
               </div>
