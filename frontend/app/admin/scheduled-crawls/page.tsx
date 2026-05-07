@@ -24,6 +24,11 @@ type DistConfig = {
   enabled: boolean;
 };
 
+const CHANNEL_LABELS: Record<string, string> = {
+  email: '邮件',
+  webhook: '飞书',
+};
+
 const WEEKDAY_OPTIONS = [
   { value: 1, label: '周一' },
   { value: 2, label: '周二' },
@@ -46,7 +51,7 @@ export default function ScheduledCrawlsPage() {
   const [formConfigId, setFormConfigId] = useState('');
   const [formEnabled, setFormEnabled] = useState(true);
 
-  const [emailConfigs, setEmailConfigs] = useState<DistConfig[]>([]);
+  const [allConfigs, setAllConfigs] = useState<DistConfig[]>([]);
   const { toast, confirm } = useToast();
 
   const fetchList = useCallback(async () => {
@@ -61,16 +66,16 @@ export default function ScheduledCrawlsPage() {
     }
   }, []);
 
-  const fetchEmailConfigs = useCallback(async () => {
+  const fetchConfigs = useCallback(async () => {
     try {
       const data = await api.get<{ items: DistConfig[] }>('/api/v1/distribution/configs');
-      setEmailConfigs(data.items.filter(c => c.channel_type === 'email' && c.enabled));
+      setAllConfigs(data.items.filter(c => c.enabled));
     } catch {
       // ignore
     }
   }, []);
 
-  useEffect(() => { fetchList(); fetchEmailConfigs(); }, [fetchList, fetchEmailConfigs]);
+  useEffect(() => { fetchList(); fetchConfigs(); }, [fetchList, fetchConfigs]);
 
   function openNew() {
     setEditId(null);
@@ -148,7 +153,7 @@ export default function ScheduledCrawlsPage() {
     if (!await confirm('确认立即执行一次？')) return;
     try {
       await api.post(`/api/v1/crawler/scheduled-crawls/${id}/run`);
-      toast('已触发执行，将在后台完成爬取并发送邮件', 'success');
+      toast('已触发执行，将在后台完成爬取并发送', 'success');
     } catch (e: unknown) {
       toast(e instanceof ApiError ? e.message : '触发失败', 'error');
     }
@@ -159,7 +164,7 @@ export default function ScheduledCrawlsPage() {
       <div className="mb-8 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold" style={{ color: '#18181b' }}>定时爬取</h1>
-          <p className="mt-1.5 text-sm" style={{ color: '#9ca3af' }}>定时从固定网站爬取文章并逐篇邮件推送</p>
+          <p className="mt-1.5 text-sm" style={{ color: '#9ca3af' }}>定时从固定网站爬取文章并逐篇推送</p>
         </div>
         <button onClick={openNew} className="btn-primary">
           新增定时任务
@@ -257,15 +262,15 @@ export default function ScheduledCrawlsPage() {
                 </div>
               </div>
               <div>
-                <label className="block text-xs mb-1" style={{ color: '#9ca3af' }}>邮件通道</label>
+                <label className="block text-xs mb-1" style={{ color: '#9ca3af' }}>发送通道</label>
                 <select value={formConfigId} onChange={e => setFormConfigId(e.target.value)} className="input">
                   <option value="">请选择</option>
-                  {emailConfigs.map(c => (
-                    <option key={c.id} value={c.id}>{c.name}</option>
+                  {allConfigs.map(c => (
+                    <option key={c.id} value={c.id}>{c.name}（{CHANNEL_LABELS[c.channel_type] || c.channel_type}）</option>
                   ))}
                 </select>
-                {emailConfigs.length === 0 && (
-                  <p className="mt-1 text-xs" style={{ color: '#ef4444' }}>暂无可用邮件通道，请先在分发配置中添加</p>
+                {allConfigs.length === 0 && (
+                  <p className="mt-1 text-xs" style={{ color: '#ef4444' }}>暂无可用通道，请先在分发配置中添加</p>
                 )}
               </div>
               <label className="flex items-center gap-2 text-sm cursor-pointer" style={{ color: '#6b7280' }}>

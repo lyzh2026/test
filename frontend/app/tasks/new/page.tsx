@@ -39,6 +39,7 @@ type PastTask = {
 
 export default function NewTaskPage() {
   const router = useRouter();
+  const [mode, setMode] = useState<'once' | 'scheduled'>('once');
   const [taskName, setTaskName] = useState('');
   const [dateFrom, setDateFrom] = useState(todayISO());
   const [dateTo, setDateTo] = useState(todayISO());
@@ -153,11 +154,42 @@ export default function NewTaskPage() {
   return (
     <main className="min-h-screen p-8 animate-fade-in">
       <div className="max-w-3xl mx-auto">
-      <div className="mb-8">
-        <h1 className="text-2xl font-semibold" style={{ color: '#18181b' }}>新建采集任务</h1>
-        <p className="mt-1.5 text-sm" style={{ color: '#9ca3af' }}>配置入口 URL 与采集参数</p>
+      <div className="mb-8 text-center">
+        <h1 className="text-3xl font-semibold" style={{ color: '#18181b' }}>智能采集岛</h1>
       </div>
 
+      {/* 顶部切换栏 */}
+      <div className="flex justify-center mb-6">
+        <div className="inline-flex items-center rounded-full p-1" style={{ background: '#f3f4f6' }}>
+          <button
+            type="button"
+            onClick={() => setMode('once')}
+            className="px-5 py-2 text-sm font-medium rounded-full transition-all duration-200"
+            style={{
+              background: mode === 'once' ? '#ffffff' : 'transparent',
+              color: mode === 'once' ? '#18181b' : '#9ca3af',
+              boxShadow: mode === 'once' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+            }}
+          >
+            即时采集任务
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode('scheduled')}
+            className="px-5 py-2 text-sm font-medium rounded-full transition-all duration-200"
+            style={{
+              background: mode === 'scheduled' ? '#ffffff' : 'transparent',
+              color: mode === 'scheduled' ? '#18181b' : '#9ca3af',
+              boxShadow: mode === 'scheduled' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+            }}
+          >
+            定时监控任务
+          </button>
+        </div>
+      </div>
+
+      {mode === 'once' && (
+      <>
       <form className="card p-6 space-y-6">
         <div className="relative">
           <label className="mb-1.5 block text-sm" style={{ color: '#6b7280' }}>任务名称（可选）</label>
@@ -296,7 +328,7 @@ export default function NewTaskPage() {
               发现链接（{links.length} 条）
             </h2>
             <div className="flex items-center gap-4">
-              <label className="flex items-center gap-2 text-sm" style={{ color: '#6b7280' }} cursor-pointer>
+              <label className="flex items-center gap-2 text-sm cursor-pointer" style={{ color: '#6b7280' }}>
                 <input
                   type="checkbox"
                   checked={selected.size === links.length && links.length > 0}
@@ -342,15 +374,23 @@ export default function NewTaskPage() {
           )}
         </section>
       )}
+      </>
+      )}
 
-      {/* 定时任务创建 */}
+      {mode === 'scheduled' && (
       <section className="mt-8">
         <ScheduledTaskForm />
       </section>
+      )}
       </div>
     </main>
   );
 }
+
+const CHANNEL_LABELS: Record<string, string> = {
+  email: '邮件',
+  webhook: '飞书',
+};
 
 function ScheduledTaskForm() {
   const [formName, setFormName] = useState('');
@@ -358,7 +398,7 @@ function ScheduledTaskForm() {
   const [formWeekdays, setFormWeekdays] = useState<number[]>([1, 3, 5]);
   const [formConfigId, setFormConfigId] = useState('');
   const [formEnabled, setFormEnabled] = useState(true);
-  const [emailConfigs, setEmailConfigs] = useState<DistConfig[]>([]);
+  const [allConfigs, setAllConfigs] = useState<DistConfig[]>([]);
   const [saving, setSaving] = useState(false);
   const { toast } = useToast();
   const router = useRouter();
@@ -367,19 +407,19 @@ function ScheduledTaskForm() {
   const [pastScheduled, setPastScheduled] = useState<{ id: string; name: string; url_list: string[]; weekdays: number[]; email_config_id: string; enabled: boolean }[]>([]);
   const [showScheduledHistory, setShowScheduledHistory] = useState(false);
 
-  const fetchEmailConfigs = useCallback(async () => {
+  const fetchConfigs = useCallback(async () => {
     try {
       const data = await api.get<{ items: DistConfig[] }>('/api/v1/distribution/configs');
-      setEmailConfigs(data.items.filter(c => c.channel_type === 'email' && c.enabled));
+      setAllConfigs(data.items.filter(c => c.enabled));
     } catch { /* ignore */ }
   }, []);
 
   useEffect(() => {
-    fetchEmailConfigs();
+    fetchConfigs();
     api.get<{ items: { id: string; name: string; url_list: string[]; weekdays: number[]; email_config_id: string; enabled: boolean }[] }>('/api/v1/crawler/scheduled-crawls')
       .then(data => setPastScheduled(data.items))
       .catch(() => {});
-  }, [fetchEmailConfigs]);
+  }, [fetchConfigs]);
 
   function selectPastScheduled(t: { name: string; url_list: string[]; weekdays: number[]; email_config_id: string; enabled: boolean }) {
     setFormName(t.name);
@@ -399,7 +439,7 @@ function ScheduledTaskForm() {
     const urls = formUrls.split('\n').map(s => s.trim()).filter(Boolean);
     if (urls.length === 0) { toast('请输入至少一个 URL', 'error'); return; }
     if (formWeekdays.length === 0) { toast('请选择至少一个执行日', 'error'); return; }
-    if (!formConfigId) { toast('请选择邮件通道', 'error'); return; }
+    if (!formConfigId) { toast('请选择发送通道', 'error'); return; }
     setSaving(true);
     try {
       await api.post('/api/v1/crawler/scheduled-crawls', {
@@ -423,7 +463,7 @@ function ScheduledTaskForm() {
       <div className="flex items-center justify-between mb-5">
         <div>
           <h2 className="text-base font-medium" style={{ color: '#18181b' }}>新建定时任务</h2>
-          <p className="mt-1 text-xs" style={{ color: '#9ca3af' }}>定时从固定网站爬取文章并自动邮件推送</p>
+          <p className="mt-1 text-xs" style={{ color: '#9ca3af' }}>定时从固定网站爬取文章并自动推送</p>
         </div>
       </div>
 
@@ -465,14 +505,14 @@ function ScheduledTaskForm() {
           </div>
         </div>
         <div>
-          <label className="block text-xs mb-1" style={{ color: '#9ca3af' }}>邮件通道</label>
+          <label className="block text-xs mb-1" style={{ color: '#9ca3af' }}>发送通道</label>
           <select value={formConfigId} onChange={e => setFormConfigId(e.target.value)} className="input">
             <option value="">请选择</option>
-            {emailConfigs.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            {allConfigs.map(c => <option key={c.id} value={c.id}>{c.name}（{CHANNEL_LABELS[c.channel_type] || c.channel_type}）</option>)}
           </select>
-          {emailConfigs.length === 0 && (
+          {allConfigs.length === 0 && (
             <p className="mt-1 text-xs" style={{ color: '#ef4444' }}>
-              暂无可用邮件通道，请先在设置页分发配置中添加
+              暂无可用通道，请先在设置页分发配置中添加
             </p>
           )}
         </div>
