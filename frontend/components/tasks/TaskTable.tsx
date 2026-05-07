@@ -50,9 +50,6 @@ function ProgressBar({ completed, total, failed }: { completed: number; total: n
         )}
       </div>
       <span className="text-xs" style={{ color: '#6b7280' }}>{completed}/{total}</span>
-      {failed > 0 && (
-        <span className="text-xs" style={{ color: '#ef4444' }}>-{failed}</span>
-      )}
     </div>
   );
 }

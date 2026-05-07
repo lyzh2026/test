@@ -187,6 +187,22 @@ async def trigger_dispatch(
         return error(2001, f"触发失败: {str(e)}", http_status=500, request=request)
 
 
+@router.get("/configs/enabled")
+async def list_enabled_configs(
+    request: Request,
+    _: object = Depends(current_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """列出所有已启用的通道（供发送时选择）。"""
+    result = await session.execute(
+        select(DistributionConfig).where(
+            DistributionConfig.enabled == True,
+        ).order_by(DistributionConfig.created_at)
+    )
+    items = result.scalars().all()
+    return success({"items": [_serialize_config(item) for item in items]}, request=request)
+
+
 @router.get("/configs/email-enabled")
 async def list_email_configs(
     request: Request,
@@ -212,27 +228,55 @@ async def send_article(
     _: object = Depends(current_admin),
     session: AsyncSession = Depends(get_session),
 ):
-    """通过指定邮件通道发送单篇文章。"""
+    """通过指定通道发送单篇文章。"""
     from app.models.article import Article
-    from app.modules.distribution.service import send_article_email
+    from app.modules.distribution.service import send_article_email, _get_adapter
+    from app.modules.distribution.adapters.webhook_adapter import _build_feishu_card
+    from app.modules.distribution.schemas import ArticleItem, CategoryGroup, ReportStats, WeeklyReport
     from sqlalchemy.orm import joinedload
 
     config_id = payload.get("config_id", "")
     if not config_id:
-        return error(1003, "请指定要使用的邮件通道", http_status=400, request=request)
+        return error(1003, "请指定要使用的通道", http_status=400, request=request)
 
     article = await session.get(Article, article_id, options=[joinedload(Article.ai_analysis)])
     if not article:
         return error(1002, "文章不存在", http_status=404, request=request)
 
     cfg = await session.get(DistributionConfig, config_id)
-    if not cfg or not cfg.enabled or cfg.channel_type != "email":
-        return error(1003, "邮件通道不存在或未启用", http_status=400, request=request)
+    if not cfg or not cfg.enabled:
+        return error(1003, "通道不存在或未启用", http_status=400, request=request)
 
     try:
-        await send_article_email(article, cfg.config)
-        to_addrs = cfg.config.get("to_addrs", [])
-        return success({"message": f"文章已发送至 {len(to_addrs)} 个收件人"}, request=request)
+        if cfg.channel_type == "email":
+            await send_article_email(article, cfg.config)
+            to_addrs = cfg.config.get("to_addrs", [])
+            return success({"message": f"文章已发送至 {len(to_addrs)} 个收件人"}, request=request)
+        elif cfg.channel_type == "webhook":
+            from datetime import date
+            today = date.today()
+            report = WeeklyReport(
+                year_week=f"{today.isocalendar()[0]}-W{today.isocalendar()[1]:02d}",
+                date_range_start=today,
+                date_range_end=today,
+                categories=[CategoryGroup(
+                    name="单篇文章",
+                    articles=[ArticleItem(
+                        title=article.original_title,
+                        summary=article.ai_analysis.summary if article.ai_analysis else "",
+                        url=article.original_link,
+                        publish_date=article.publish_date,
+                        source_unit=article.source_unit or "",
+                    )],
+                )],
+                stats=ReportStats(total_articles=1, total_categories=1),
+            )
+            adapter = _get_adapter("webhook")
+            if adapter:
+                await adapter.send(report, cfg.config)
+            return success({"message": "文章已发送至飞书"}, request=request)
+        else:
+            return error(1003, f"不支持的通道类型: {cfg.channel_type}", http_status=400, request=request)
     except Exception as e:
         return error(2002, f"发送失败: {str(e)}", http_status=500, request=request)
 
