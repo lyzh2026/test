@@ -47,7 +47,6 @@ function ProgressBar({ completed, total, failed }: { completed: number; total: n
         {greenW > 0 && <div className="h-full transition-all" style={{ width: `${greenW}%`, background: '#22c55e' }} />}
         {redW > 0 && <div className="h-full transition-all" style={{ width: `${redW}%`, background: '#ef4444' }} />}
       </div>
-      </div>
       <span className="text-xs" style={{ color: '#6b7280' }}>{completed}/{total}</span>
     </div>
   );
