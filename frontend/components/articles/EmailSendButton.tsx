@@ -21,6 +21,7 @@ export function EmailSendButton({ articleId, compact, onDone }: { articleId: str
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -29,21 +30,29 @@ export function EmailSendButton({ articleId, compact, onDone }: { articleId: str
       .catch(() => {});
   }, []);
 
-  async function handleSend(cfg: DistConfig) {
+  async function handleSend() {
+    if (!selectedId) return;
     setSending(true);
     try {
-      await api.post(`/api/v1/distribution/send-article/${articleId}`, { config_id: cfg.id });
-      setShowPicker(false);
-      const target = cfg.channel_type === 'email'
+      await api.post(`/api/v1/distribution/send-article/${articleId}`, { config_id: selectedId });
+      const cfg = configs.find(c => c.id === selectedId);
+      const target = cfg?.channel_type === 'email'
         ? `邮件至 ${cfg.config.to_addrs?.join(', ') || cfg.name}`
         : '飞书';
       toast(`已发送至${target}`, 'success');
+      setShowPicker(false);
+      setSelectedId(null);
       onDone?.();
     } catch (e: unknown) {
       toast(e instanceof ApiError ? e.message : '发送失败', 'error');
     } finally {
       setSending(false);
     }
+  }
+
+  function handleClose() {
+    setShowPicker(false);
+    setSelectedId(null);
   }
 
   return (
@@ -53,7 +62,7 @@ export function EmailSendButton({ articleId, compact, onDone }: { articleId: str
       </button>
 
       {showPicker && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center animate-fade-in" style={{ background: 'rgba(0,0,0,0.6)' }} onClick={() => setShowPicker(false)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center animate-fade-in" style={{ background: 'rgba(0,0,0,0.6)' }} onClick={handleClose}>
           <div className="w-96 card p-6 animate-slide-up" style={{ background: '#fcfcfc' }} onClick={e => e.stopPropagation()}>
             <h2 className="mb-1 text-base font-medium" style={{ color: '#18181b' }}>选择发送通道</h2>
             <p className="mb-5 text-xs" style={{ color: '#9ca3af' }}>选择要通过哪个通道发送此文章</p>
@@ -61,10 +70,13 @@ export function EmailSendButton({ articleId, compact, onDone }: { articleId: str
               {configs.map(cfg => (
                 <button
                   key={cfg.id}
-                  onClick={() => handleSend(cfg)}
+                  onClick={() => setSelectedId(cfg.id)}
                   disabled={sending}
                   className="w-full rounded-[12px] p-4 text-left transition-all hover:bg-surface-50"
-                  style={{ background: '#f9fafb', border: '1px solid #e5e7eb' }}
+                  style={{
+                    background: selectedId === cfg.id ? '#eff6ff' : '#f9fafb',
+                    border: selectedId === cfg.id ? '1px solid #3b82f6' : '1px solid #e5e7eb',
+                  }}
                 >
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-medium" style={{ color: '#18181b' }}>{cfg.name}</span>
@@ -83,8 +95,11 @@ export function EmailSendButton({ articleId, compact, onDone }: { articleId: str
                 </button>
               ))}
             </div>
-            <div className="mt-4 flex justify-end">
-              <button onClick={() => setShowPicker(false)} className="btn-secondary text-sm" disabled={sending}>取消</button>
+            <div className="mt-4 flex justify-end gap-3">
+              <button onClick={handleClose} className="btn-secondary text-sm" disabled={sending}>取消</button>
+              <button onClick={handleSend} disabled={!selectedId || sending} className="btn-primary text-sm disabled:opacity-40">
+                {sending ? '发送中…' : '确认发送'}
+              </button>
             </div>
           </div>
         </div>

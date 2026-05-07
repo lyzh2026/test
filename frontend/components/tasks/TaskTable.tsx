@@ -39,15 +39,14 @@ const STATUS_LABEL: Record<string, string> = {
 
 function ProgressBar({ completed, total, failed }: { completed: number; total: number; failed: number }) {
   if (total === 0) return <span style={{ color: '#9ca3af' }}>-</span>;
-  const pct = Math.round((completed / total) * 100);
-  const failedPct = Math.round((failed / total) * 100);
+  const greenW = (completed / total) * 100;
+  const redW = (failed / total) * 100;
   return (
     <div className="flex items-center gap-2">
       <div className="flex h-1.5 w-20 overflow-hidden rounded-full" style={{ background: '#f3f4f6' }}>
-        <div className="h-full transition-all" style={{ width: `${pct}%`, background: '#22c55e' }} />
-        {failedPct > 0 && (
-          <div className="h-full" style={{ width: `${failedPct}%`, background: '#ef4444' }} />
-        )}
+        {greenW > 0 && <div className="h-full transition-all" style={{ width: `${greenW}%`, background: '#22c55e' }} />}
+        {redW > 0 && <div className="h-full transition-all" style={{ width: `${redW}%`, background: '#ef4444' }} />}
+      </div>
       </div>
       <span className="text-xs" style={{ color: '#6b7280' }}>{completed}/{total}</span>
     </div>
@@ -174,6 +173,15 @@ export function TaskTable({ items, onRefresh }: { items: Task[]; onRefresh?: () 
               <td className="px-4 py-3 text-xs" style={{ color: '#9ca3af' }}>{formatDate(t.created_at)}</td>
               <td className="px-4 py-3">
                 <div className="flex items-center gap-3">
+                  {(t.status === 'running' || t.status === 'pending') && (
+                    <Link
+                      href={`/tasks/${t.id}`}
+                      className="text-xs transition-colors"
+                      style={{ color: '#22c55e' }}
+                    >
+                      查看进度
+                    </Link>
+                  )}
                   <Link
                     href={`/articles?task_id=${t.id}`}
                     className="text-xs transition-colors"
