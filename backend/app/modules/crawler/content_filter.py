@@ -263,5 +263,6 @@ class BM25Filter:
         return blocks[best_start:best_start + best_len]
 
 
-# 便捷入口
-content_filter_pipeline = lambda html: BM25Filter().filter(Pruning.prune(html))
+# 便捷入口（模块级单例，避免每次创建新实例）
+_bm25_singleton = BM25Filter()
+content_filter_pipeline = lambda html: _bm25_singleton.filter(Pruning.prune(html))

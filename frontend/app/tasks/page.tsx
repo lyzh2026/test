@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { api } from '@/lib/api';
 import { TaskTable } from '@/components/tasks/TaskTable';
+import { ScheduledTasksPanel } from '@/components/tasks/ScheduledTasksPanel';
 
 type Task = {
   id: string;
@@ -29,11 +30,44 @@ const STATUS_OPTIONS = [
 ];
 
 const PAGE_SIZE = 20;
+const POLL_INTERVAL = 3000;
 
 export default function TasksPage() {
+  const [tab, setTab] = useState<'once' | 'scheduled'>('once');
+
   return (
     <main className="min-h-screen p-8 animate-fade-in">
-      <OnceTasksTab />
+      <div className="mb-6">
+        <h1 className="text-2xl font-semibold" style={{ color: '#18181b' }}>任务列表</h1>
+        <p className="mt-1.5 text-sm" style={{ color: '#9ca3af' }}>管理与监控采集任务</p>
+      </div>
+
+      <div className="mb-6 flex gap-1 p-1 rounded-lg" style={{ background: '#f3f4f6', width: 'fit-content' }}>
+        <button
+          onClick={() => setTab('once')}
+          className="px-4 py-1.5 rounded-md text-sm font-medium transition-all"
+          style={{
+            background: tab === 'once' ? '#ffffff' : 'transparent',
+            color: tab === 'once' ? '#18181b' : '#6b7280',
+            boxShadow: tab === 'once' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+          }}
+        >
+          一次性任务
+        </button>
+        <button
+          onClick={() => setTab('scheduled')}
+          className="px-4 py-1.5 rounded-md text-sm font-medium transition-all"
+          style={{
+            background: tab === 'scheduled' ? '#ffffff' : 'transparent',
+            color: tab === 'scheduled' ? '#18181b' : '#6b7280',
+            boxShadow: tab === 'scheduled' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+          }}
+        >
+          定时任务
+        </button>
+      </div>
+
+      {tab === 'once' ? <OnceTasksTab /> : <ScheduledTasksPanel />}
     </main>
   );
 }
@@ -44,14 +78,15 @@ function OnceTasksTab() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [offset, setOffset] = useState(0);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const [statusFilter, setStatusFilter] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [keyword, setKeyword] = useState('');
 
-  const fetchTasks = useCallback(async (newOffset: number = 0) => {
-    setLoading(true);
+  const fetchTasks = useCallback(async (newOffset: number = 0, silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const params = new URLSearchParams();
       params.set('limit', String(PAGE_SIZE));
@@ -68,11 +103,28 @@ function OnceTasksTab() {
     } catch {
       // ignore
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [statusFilter, dateFrom, dateTo, keyword]);
 
   useEffect(() => { fetchTasks(0); }, [fetchTasks]);
+
+  // Poll when there are running/pending tasks
+  useEffect(() => {
+    const hasActive = items.some(t => t.status === 'running' || t.status === 'pending');
+    if (hasActive && !pollRef.current) {
+      pollRef.current = setInterval(() => fetchTasks(offset, true), POLL_INTERVAL);
+    } else if (!hasActive && pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
+  }, [items, offset, fetchTasks]);
 
   function handleSearch() { fetchTasks(0); }
   function handleReset() {
@@ -84,13 +136,6 @@ function OnceTasksTab() {
 
   return (
     <>
-      <div className="mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold" style={{ color: '#18181b' }}>任务列表</h1>
-          <p className="mt-1.5 text-sm" style={{ color: '#9ca3af' }}>管理与监控采集任务</p>
-        </div>
-      </div>
-
       <div className="card p-4 mb-6">
         <div className="flex flex-wrap items-end gap-3">
           <div>

@@ -67,10 +67,10 @@ export default async function DashboardPage() {
               {daily.map((d) => {
                 const h = max > 0 ? Math.round((d.total / max) * 100) : 0;
                 return (
-                  <div key={d.date} className="flex flex-1 flex-col items-center justify-end group" title={`${d.date} : ${d.total}`}>
+                  <div key={d.date} className="flex flex-1 h-full flex-col items-center justify-end group" title={`${d.date} : ${d.total}`}>
                     <div
                       className="w-full rounded-t transition-all duration-200 group-hover:opacity-80 bg-blue-500"
-                      style={{ height: `${Math.max(d.total > 0 ? 4 : 1, h)}%`, borderRadius: '2px 2px 0 0' }}
+                      style={{ height: `${d.total > 0 ? Math.max(4, h) : 0}%`, borderRadius: '2px 2px 0 0' }}
                     />
                     <span className="mt-1.5 text-[10px] text-gray-400">{d.date.slice(5)}</span>
                   </div>

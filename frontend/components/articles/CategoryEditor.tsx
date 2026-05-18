@@ -29,8 +29,14 @@ export function CategoryEditor({
 
   async function handleAdd(label: string) {
     if (categories.length >= 3) return;
-    const next = [...categories, { label, confidence: 1.0 }];
-    setCategories(next);
+    // "未分类"具有排他性
+    if (label === '未分类') {
+      setCategories([{ label, confidence: 1.0 }]);
+      return;
+    }
+    // 添加其他标签时移除"未分类"
+    const next = categories.filter((c) => c.label !== '未分类');
+    setCategories([...next, { label, confidence: 1.0 }]);
   }
 
   function handleRemove(label: string) {

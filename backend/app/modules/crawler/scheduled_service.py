@@ -145,7 +145,6 @@ async def run_scheduled_crawl(schedule_id: str):
                 target_date=date.today(),
                 task_name=f"定时爬取 - {sc.name}",
                 callback_url=None,
-                priority=1,
             )
         except Exception as e:
             logger.error("定时爬取创建任务失败: %s %r", schedule_id, e)

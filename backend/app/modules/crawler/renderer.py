@@ -5,6 +5,7 @@
   2. 上下文隔离（每个 URL 独立 browser context + 绑定特定 proxy）
   3. 浏览器退休机制（达到页面数上限后自动重启）
   4. 随机行为模拟（滚动轮数/间隔随机化）
+  5. httpx 快速请求（静态页面跳过 Playwright）
 """
 import asyncio
 import logging
@@ -12,7 +13,9 @@ import os
 import random
 import time
 
+import httpx
 import psutil
+from bs4 import BeautifulSoup
 from playwright.async_api import Browser, Page, Playwright, async_playwright
 
 from app.core.config import settings
@@ -20,6 +23,12 @@ from app.modules.crawler.proxy_pool import proxy_pool
 from app.modules.crawler.anti_detection import build_stealth_scripts, detect_blocking, random_viewport
 
 logger = logging.getLogger(__name__)
+
+# httpx 共享客户端（连接池复用）
+_httpx_client: httpx.AsyncClient | None = None
+
+# 判断页面是否需要 JS 渲染的最小标签数阈值
+_STATIC_MIN_TAGS = 20
 
 _USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -55,8 +64,16 @@ class DynamicRenderer:
         self._lock = asyncio.Lock()
         self._semaphore = asyncio.Semaphore(settings.RENDER_POOL_SIZE)
         self._page_count = 0  # 当前浏览器进程已处理的页面数
+        self._shared_context = None  # 非隔离模式下的共享 context
 
     async def startup(self):
+        global _httpx_client
+        if _httpx_client is None:
+            _httpx_client = httpx.AsyncClient(
+                timeout=httpx.Timeout(15.0, connect=10.0),
+                follow_redirects=True,
+                limits=httpx.Limits(max_connections=50, max_keepalive_connections=20),
+            )
         if self._playwright is None:
             self._playwright = await async_playwright().start()
         await self._launch_browser()
@@ -67,8 +84,60 @@ class DynamicRenderer:
             settings.RENDER_CONTEXT_ISOLATION,
         )
 
-    async def shutdown(self):
+    @staticmethod
+    async def fast_fetch(url: str, *, min_content_length: int = 500) -> dict | None:
+        """httpx 快速请求：静态页面直接返回 HTML，跳过 Playwright。
+
+        返回 None 表示需要 JS 渲染（降级到 Playwright）。
+        返回 dict 表示成功获取，格式同 render()。
+        """
+        global _httpx_client
+        if _httpx_client is None:
+            return None
         try:
+            resp = await _httpx_client.get(url, headers={"User-Agent": _random_ua()})
+            if resp.status_code != 200:
+                return None
+            html = resp.text
+            if len(html) < min_content_length:
+                return None
+            # 检测是否为 JS 渲染页面：标签数过少说明内容靠 JS 生成
+            tag_count = html.count("<") + html.count("</")
+            if tag_count < _STATIC_MIN_TAGS:
+                return None
+            # 检测常见 JS 渲染框架的空壳标记
+            lower = html.lower()
+            if any(marker in lower for marker in [
+                "id=\"__next\"", "id=\"__nuxt\"", "id=\"app\"", "id=\"root\"",
+                "<noscript>", "window.__INITIAL_STATE__",
+            ]):
+                # 有 JS 框架标记但标签数够多，可能是 SSR 页面，仍可尝试
+                # 如果 body 内文本过短则降级
+                soup = await asyncio.to_thread(BeautifulSoup, html, "lxml")
+                body = soup.find("body")
+                if body and len(body.get_text(strip=True)) < 200:
+                    return None
+            title = ""
+            try:
+                soup = await asyncio.to_thread(BeautifulSoup, html, "lxml")
+                t = soup.find("title")
+                if t:
+                    title = t.get_text(strip=True)
+            except Exception:
+                pass
+            return {"html": html, "title": title, "final_url": str(resp.url), "ok": True}
+        except Exception:
+            return None
+
+    async def shutdown(self):
+        global _httpx_client
+        try:
+            if _httpx_client:
+                await _httpx_client.aclose()
+                _httpx_client = None
+            if self._shared_context:
+                await self._shared_context.close()
+                self._shared_context = None
             if self._browser:
                 await self._browser.close()
         finally:
@@ -78,6 +147,7 @@ class DynamicRenderer:
                 self._playwright = None
 
     async def _launch_browser(self):
+        self._shared_context = None  # 浏览器重启时清除共享上下文
         launch_args = [
             "--no-sandbox",
             "--disable-dev-shm-usage",
@@ -144,16 +214,26 @@ class DynamicRenderer:
             proxy_config = {"server": proxy_str} if proxy_str else None
 
             # 上下文隔离：每个 URL 独立 context 或共享
-            _ua = _random_ua()
-            _vp = random_viewport()
-            context_kwargs = dict(
-                user_agent=_ua,
-                viewport=_vp,
-                locale="zh-CN",
-                proxy=proxy_config,
-                timezone_id="Asia/Shanghai",
-            )
-            context = await self._browser.new_context(**context_kwargs)
+            if settings.RENDER_CONTEXT_ISOLATION:
+                _ua = _random_ua()
+                _vp = random_viewport()
+                context_kwargs = dict(
+                    user_agent=_ua,
+                    viewport=_vp,
+                    locale="zh-CN",
+                    proxy=proxy_config,
+                    timezone_id="Asia/Shanghai",
+                )
+                context = await self._browser.new_context(**context_kwargs)
+            else:
+                if self._shared_context is None or self._shared_context.is_closed():
+                    self._shared_context = await self._browser.new_context(
+                        user_agent=_random_ua(),
+                        viewport=random_viewport(),
+                        locale="zh-CN",
+                        timezone_id="Asia/Shanghai",
+                    )
+                context = self._shared_context
             page = await context.new_page()
 
             # Stealth：注入增强反检测脚本
@@ -214,7 +294,10 @@ class DynamicRenderer:
                 raise
             finally:
                 try:
-                    await context.close()
+                    if settings.RENDER_CONTEXT_ISOLATION:
+                        await context.close()
+                    else:
+                        await page.close()
                 except Exception:
                     pass
 

@@ -2,6 +2,7 @@
 import asyncio
 import hashlib
 import logging
+import random
 import re
 from datetime import date, datetime, timezone
 from urllib.parse import urlparse, urlunparse
@@ -46,8 +47,13 @@ _RETRYABLE_KEYWORDS = [
 # Blocking types that are retryable (except captcha which requires human intervention)
 _RETRYABLE_BLOCK_TYPES = {"cloudflare", "ratelimit", "generic"}
 
-# Per-domain block counters for adaptive delay
+# Per-domain block counters for adaptive delay (periodic reset)
 _domain_block_counts: dict[str, int] = {}
+_domain_block_counts_last_reset: float = 0.0
+_DOMAIN_BLOCK_RESET_INTERVAL: float = 600.0  # 10 分钟重置一次
+
+# 任务级并发信号量，限制同时运行的协程数
+_task_concurrency_sem = asyncio.Semaphore(20)
 
 
 def _is_retryable(result: dict) -> bool:
@@ -270,7 +276,7 @@ async def _run_discovery_and_crawl(
         t.total_urls = len(valid_urls)
         t.failed_details = failed_details
         t.failed_urls = len(failed_details)
-        t.status = "pending" if valid_urls else ("failed" if failed_details else "pending")
+        t.status = "pending" if valid_urls else "failed"
         if not valid_urls:
             t.completed_at = datetime.now(timezone.utc)
         await session.commit()
@@ -285,9 +291,13 @@ async def _run_discovery_and_crawl(
         )
 
 
+_CRAWL_DONE_KEY_PREFIX = "crawl_done:"
+
+
 async def run_crawl_job(task_id: str, urls: list[str]):
     """APScheduler 入口：单任务整体执行，每完成一个 URL 推送进度事件。
 
+    支持断点续爬：已完成的 URL 记录在 Redis 集合中，重启后自动跳过。
     顶层 try/except/finally 确保任何异常都不会让任务卡在 running 状态。
     """
     logger.info("crawl job start: task=%s urls=%s", task_id, len(urls))
@@ -299,6 +309,28 @@ async def run_crawl_job(task_id: str, urls: list[str]):
         task.status = "running"
         task.started_at = datetime.now(timezone.utc)
         await session.commit()
+
+    # 断点续爬：过滤掉已完成的 URL
+    done_key = f"{_CRAWL_DONE_KEY_PREFIX}{task_id}"
+    try:
+        done_urls = await redis_client.smembers(done_key)
+        if done_urls:
+            done_set = set(done_urls)
+            original_count = len(urls)
+            urls = [u for u in urls if u not in done_set]
+            logger.info("resume crawl: skipped %d done URLs, %d remaining", original_count - len(urls), len(urls))
+    except Exception:
+        pass
+
+    if not urls:
+        logger.info("crawl job: all URLs already done, task=%s", task_id)
+        async with AsyncSessionLocal() as session:
+            t = await session.get(CrawlerTask, task_id)
+            if t:
+                t.status = "completed"
+                t.completed_at = datetime.now(timezone.utc)
+                await session.commit()
+        return
 
     total = len(urls)
     completed = 0
@@ -316,16 +348,17 @@ async def run_crawl_job(task_id: str, urls: list[str]):
             nonlocal completed, failed
             if task_id in _cancelled_tasks:
                 return None
-            progress_bus.emit(ProgressEvent(
-                task_id=task_id, status="running",
-                completed=completed, failed=failed, total=total,
-                current_url=url,
-            ))
-            await domain_rate_limiter.acquire(url)
-            try:
-                res = await _crawl_one(task_id, url, target_date=task.target_date, date_to=task.date_to)
-            finally:
-                await domain_rate_limiter.release(url)
+            async with _task_concurrency_sem:
+                progress_bus.emit(ProgressEvent(
+                    task_id=task_id, status="running",
+                    completed=completed, failed=failed, total=total,
+                    current_url=url,
+                ))
+                await domain_rate_limiter.acquire(url)
+                try:
+                    res = await _crawl_one(task_id, url, target_date=task.target_date, date_to=task.date_to)
+                finally:
+                    await domain_rate_limiter.release(url)
             if isinstance(res, Exception):
                 failed += 1
             elif isinstance(res, dict) and res.get("ok"):
@@ -334,6 +367,12 @@ async def run_crawl_job(task_id: str, urls: list[str]):
                 completed += 1
             else:
                 failed += 1
+            # 断点续爬：标记此 URL 已处理（成功或失败都标记，避免重试死循环）
+            try:
+                await redis_client.sadd(done_key, url)
+                await redis_client.expire(done_key, 86400)  # 24 小时过期
+            except Exception:
+                pass
             progress_bus.emit(ProgressEvent(
                 task_id=task_id, status="running",
                 completed=completed, failed=failed, total=total,
@@ -350,6 +389,66 @@ async def run_crawl_job(task_id: str, urls: list[str]):
             logger.warning("crawl job timeout: task=%s", task_id)
             results = [{"ok": False, "code": 5001, "reason": "任务全局超时", "stage": "timeout"}] * len(urls)
 
+        # === 批量入库：收集所有待插入文章，一次性 bulk insert ===
+        pending_articles: list[dict] = []
+        pending_fingerprints: list[tuple[str, int | None]] = []  # (fingerprint, title_hash)
+        ai_dispatch_ids: list[str] = []
+
+        for res in results:
+            if isinstance(res, dict) and res.get("pending_insert"):
+                pending_articles.append(res["article_data"])
+                pending_fingerprints.append((res.get("fingerprint"), res.get("title_hash")))
+
+        if pending_articles:
+            # 逐个独立事务插入，避免 add_all 回滚丢数据
+            for data in pending_articles:
+                async with AsyncSessionLocal() as sess:
+                    try:
+                        art = Article(**data)
+                        sess.add(art)
+                        await sess.commit()
+                        await sess.refresh(art)
+                        ai_dispatch_ids.append(str(art.id))
+                    except IntegrityError:
+                        await sess.rollback()
+            logger.info("batch insert: %d articles (%d new)", len(pending_articles), len(ai_dispatch_ids))
+
+            # === Redis 管道化写入指纹 ===
+            try:
+                pipe = redis_client.pipeline()
+                for fp, th in pending_fingerprints:
+                    if fp:
+                        pipe.setex(f"af:{fp}", 604800, "1")
+                    if th:
+                        pipe.sadd("article_title_hashes", str(th))
+                # 统一设置 SimHash 集合 TTL
+                pipe.expire("article_title_hashes", 604800)
+                await pipe.execute()
+            except Exception:
+                logger.warning("redis pipeline write failed, fallback to individual writes")
+                for fp, th in pending_fingerprints:
+                    try:
+                        if fp:
+                            await redis_client.setex(f"af:{fp}", 604800, "1")
+                        if th:
+                            await redis_client.sadd("article_title_hashes", str(th))
+                    except Exception:
+                        pass
+
+            # === 批量调度 AI 分析 ===
+            for aid in ai_dispatch_ids:
+                try:
+                    scheduler.add_job(
+                        _ai_analyze_dispatch,
+                        id=f"ai_analyze:{aid}",
+                        args=[aid],
+                        trigger=DateTrigger(),
+                        replace_existing=True,
+                    )
+                except Exception:
+                    pass
+
+        # === 更新任务状态 ===
         async with AsyncSessionLocal() as session:
             t = await session.get(CrawlerTask, task_id)
             if not t:
@@ -402,6 +501,13 @@ async def run_crawl_job(task_id: str, urls: list[str]):
         # 清理取消标记
         _cancelled_tasks.discard(task_id)
 
+        # 断点续爬：任务完成后清理 Redis 标记（失败任务保留以支持续爬）
+        if final_status in ("completed", "cancelled"):
+            try:
+                await redis_client.delete(done_key)
+            except Exception:
+                pass
+
         try:
             progress_bus.emit(ProgressEvent(
                 task_id=task_id, status=final_status,
@@ -417,6 +523,13 @@ async def run_crawl_job(task_id: str, urls: list[str]):
 async def _crawl_one(task_id: str, url: str, *, target_date: date, date_to: date | None = None) -> dict:
     """带自动重试的外层入口：最多重试 CRAWLER_MAX_RETRIES 次，指数退避+拦截应对。"""
     domain = urlparse(url).hostname or "unknown"
+    # 定期重置 block 计数器，避免延迟永久累加
+    global _domain_block_counts_last_reset
+    import time as _time
+    now_ts = _time.monotonic()
+    if now_ts - _domain_block_counts_last_reset > _DOMAIN_BLOCK_RESET_INTERVAL:
+        _domain_block_counts.clear()
+        _domain_block_counts_last_reset = now_ts
     for attempt in range(1, settings.CRAWLER_MAX_RETRIES + 1):
         if task_id in _cancelled_tasks:
             return {"ok": False, "code": 5001, "reason": "任务已取消", "stage": "cancelled"}
@@ -461,19 +574,19 @@ def _dual_filter_pipeline(html: str) -> str:
     对多段落文章，BM25 的"最长连续高分区"可能截断严重（132 块→3 块）；
     Pruning 直通可保留 93% 内容。取长后由 ReadabilityAdapter 做第二道防线。
     """
-    from app.modules.crawler.content_filter import content_filter_pipeline, Pruning
+    from app.modules.crawler.content_filter import Pruning, _bm25_singleton
 
-    # BM25 管道
-    try:
-        bm25_result = content_filter_pipeline(html)
-    except Exception:
-        bm25_result = ""
-
-    # Pruning 直通（跳过 BM25）
+    # Pruning 只执行一次，结果复用
     try:
         pruned_result = Pruning.prune(html)
     except Exception:
         pruned_result = ""
+
+    # BM25 管道（在 pruned 基础上做 BM25，避免重复 Pruning）
+    try:
+        bm25_result = _bm25_singleton.filter(pruned_result) if pruned_result else ""
+    except Exception:
+        bm25_result = ""
 
     # 有效性检查
     bm25_ok = bm25_result and len(bm25_result) >= 100
@@ -495,7 +608,6 @@ def _dual_filter_pipeline(html: str) -> str:
 async def _crawl_one_attempt(task_id: str, url: str, *, target_date: date, date_to: date | None = None) -> dict:
     """单 URL：渲染 → 内容过滤/缓存 → 降级链 → 翻页合并 → 日期过滤 → 入库 → 触发 AI。"""
     from app.modules.crawler.cache import page_cache
-    from app.modules.crawler.content_filter import content_filter_pipeline
 
     # ====== 缓存命中则跳过渲染 ======
     goto_extract = False
@@ -514,9 +626,13 @@ async def _crawl_one_attempt(task_id: str, url: str, *, target_date: date, date_
             goto_extract = True
 
     if not goto_extract:
-        # ====== 渲染 ======
+        # ====== 渲染（先尝试 httpx 快速请求，失败再用 Playwright） ======
         try:
-            rendered = await renderer.render(url)
+            rendered = await renderer.fast_fetch(url)
+            if rendered and rendered.get("ok"):
+                logger.debug("httpx fast fetch: %s", url)
+            else:
+                rendered = await renderer.render(url)
         except Exception as e:
             logger.exception("render failed: %s", url)
             return {"ok": False, "code": 2001, "reason": f"渲染失败：{e!r}", "stage": "render"}
@@ -665,75 +781,41 @@ async def _crawl_one_attempt(task_id: str, url: str, *, target_date: date, date_
             pass  # Redis 不可用时降级
 
     article_id: str | None = None
-    async with AsyncSessionLocal() as session:
-        # original_link 存入时已去除 tracking 参数，提高 http/https 变体间的去重率
-        original_link = _normalize_url(page.final_url or url)
+    original_link = _normalize_url(page.final_url or url)
 
-        # 先查后插：消除绝大多数因并发的 IntegrityError
+    # 先查 DB 去重（跨任务去重）
+    async with AsyncSessionLocal() as session:
         existing = await session.execute(
             select(Article).where(Article.original_link == original_link)
         )
         row = existing.scalar_one_or_none()
         if row:
             article_id = row.id
-        else:
-            article = Article(
-                task_id=task_id,
-                original_title=draft.original_title[:512],
-                source_unit=(draft.source_unit or None),
-                original_link=original_link,
-                publish_date=draft.publish_date or target_date,
-                raw_content=draft.raw_content,
-                status="raw",
-            )
-            session.add(article)
-            try:
-                await session.commit()
-                await session.refresh(article)
-                article_id = article.id
-            except IntegrityError as exc:
-                await session.rollback()
-                # 竞态：查和插之间另一协程插入了同 original_link 的记录
-                existing = await session.execute(
-                    select(Article).where(Article.original_link == original_link)
-                )
-                row = existing.scalar_one_or_none()
-                if row:
-                    article_id = row.id
-                else:
-                    logger.warning("IntegrityError but article not found: original_link=%s url=%s detail=%s", original_link, url, exc.orig)
-                    return {"ok": False, "code": 5001, "reason": "DB 唯一约束冲突且无法定位文章", "stage": "validate"}
 
-    # 写入 Redis 指纹（异步后台任务，不阻塞主流程）
     if article_id:
+        # 已存在，写入 Redis 指纹
         try:
             await redis_client.setex(f"af:{fingerprint}", 604800, "1")
         except Exception:
-            logger.warning("redis dedup write failed: %s", fingerprint)
+            pass
+        return {"ok": True, "article_id": article_id}
 
-        # SimHash 写入（同样后台写入）
-        if title_hash:
-            try:
-                await redis_client.sadd("article_title_hashes", str(title_hash))
-                remaining = await redis_client.ttl("article_title_hashes")
-                if remaining == -1:  # 无过期时间（新 key 或 TTL 已过期）
-                    await redis_client.expire("article_title_hashes", 604800)
-            except Exception:
-                pass
-
-    if article_id:
-        try:
-            scheduler.add_job(
-                _ai_analyze_dispatch,
-                id=f"ai_analyze:{article_id}",
-                args=[article_id],
-                trigger=DateTrigger(),
-                replace_existing=True,
-            )
-        except Exception as e:
-            logger.warning("schedule ai_analyze failed: %r", e)
-
-    return {"ok": True, "article_id": article_id}
+    # 新文章：返回待插入数据，由调用方批量入库
+    return {
+        "ok": True,
+        "pending_insert": True,
+        "article_data": {
+            "task_id": task_id,
+            "original_title": draft.original_title[:512],
+            "source_unit": draft.source_unit or None,
+            "original_link": original_link,
+            "publish_date": draft.publish_date or target_date,
+            "raw_content": draft.raw_content,
+            "status": "raw",
+        },
+        "fingerprint": fingerprint,
+        "title_hash": title_hash,
+    }
 
 
 async def _ai_analyze_dispatch(article_id: str):
@@ -762,6 +844,12 @@ async def retry_failed_urls(task_id: str, session: AsyncSession) -> CrawlerTask 
     task.started_at = datetime.now(timezone.utc)
     task.completed_at = None
     await session.commit()
+
+    # 清理断点续爬标记，确保重试的 URL 不被跳过
+    try:
+        await redis_client.delete(f"{_CRAWL_DONE_KEY_PREFIX}{task_id}")
+    except Exception:
+        pass
 
     scheduler.add_job(
         run_crawl_job,

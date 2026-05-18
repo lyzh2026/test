@@ -1,4 +1,5 @@
-"""站点发现服务：BFS 遍历入口页，提取文章链接。"""
+"""站点发现服务：BFS 并行遍历入口页，提取文章链接。"""
+import asyncio
 import logging
 from collections import deque
 from urllib.parse import urlparse
@@ -15,6 +16,8 @@ from app.modules.discovery.link_extractor import (
 )
 
 logger = logging.getLogger(__name__)
+
+_DISCOVERY_CONCURRENCY = 5  # BFS 每层并发数
 
 
 async def discover_articles(
@@ -37,77 +40,85 @@ async def discover_articles(
     paginated_urls: set[str] = set()  # 已翻页处理的 URL
 
     while queue and len(article_results) < max_links:
-        url, depth = queue.popleft()
-        if url in seen or depth > max_depth:
-            continue
-        seen.add(url)
+        # 批量取出同层 URL，并发渲染
+        batch: list[tuple[str, int]] = []
+        while queue and len(batch) < _DISCOVERY_CONCURRENCY:
+            batch.append(queue.popleft())
 
-        try:
-            rendered = await renderer.render(url, scroll_rounds_range=(2, 3))
-        except Exception as e:
-            logger.warning("render failed for discovery: %s - %r", url, e)
-            continue
+        async def _process_url(url: str, depth: int):
+            """渲染单个 URL，返回 (rendered, links, error)。"""
+            try:
+                rendered = await renderer.render(url, scroll_rounds_range=(2, 3))
+            except Exception as e:
+                logger.warning("render failed for discovery: %s - %r", url, e)
+                return url, depth, None, [], str(e)
+            if not rendered.get("ok"):
+                return url, depth, None, [], rendered.get("reason", "render not ok")
+            return url, depth, rendered, [], None
 
-        if not rendered.get("ok"):
-            continue
+        results = await asyncio.gather(*[_process_url(u, d) for u, d in batch])
 
-        final_url = rendered.get("final_url") or url
-        links = extract_links(rendered["html"], final_url)
-        links = dedup_links(links)
-
-        candidates: list[dict] = []
-        for link in links:
-            if is_junk_link(link) or link in seen:
+        for url, depth, rendered, _, error in results:
+            if error or not rendered:
                 continue
-            # 只保留同域链接
-            if urlparse(link).netloc != entry_host:
-                continue
-            candidates.append({"url": link, "score": score_link(link)})
 
-        # 按评分降序，优先处理高价值链接
-        candidates.sort(key=lambda x: x["score"], reverse=True)
+            final_url = rendered.get("final_url") or url
+            links = extract_links(rendered["html"], final_url)
+            links = dedup_links(links)
 
-        for item in candidates:
-            if len(article_results) >= max_links:
-                break
-            if item["url"] in seen:
-                continue
-            seen.add(item["url"])
+            candidates: list[dict] = []
+            for link in links:
+                if is_junk_link(link) or link in seen:
+                    continue
+                if urlparse(link).netloc != entry_host:
+                    continue
+                candidates.append({"url": link, "score": score_link(link)})
 
-            if is_article_link(item["url"]):
-                article_results.append(item)
-            elif is_listing_link(item["url"]) and depth < max_depth:
-                queue.append((item["url"], depth + 1))
+            candidates.sort(key=lambda x: x["score"], reverse=True)
 
-        # 自动翻页：检测"下一页"，推入同级队列（不消耗 depth）
-        if enable_pagination and url not in paginated_urls:
-            paginated_urls.add(url)
-            for _ in range(max_pages):
-                next_url = find_next_page_url(rendered["html"], final_url)
-                if not next_url or next_url in seen or next_url in paginated_urls:
+            for item in candidates:
+                if len(article_results) >= max_links:
                     break
-                paginated_urls.add(next_url)
-                try:
-                    rendered = await renderer.render(next_url, scroll_rounds_range=(2, 3))
-                except Exception as e:
-                    logger.warning("pagination render failed: %s - %r", next_url, e)
-                    break
-                if not rendered.get("ok"):
-                    break
-                final_url = rendered.get("final_url") or next_url
-                links = extract_links(rendered["html"], final_url)
-                links = dedup_links(links)
-                for link in links:
-                    if is_junk_link(link) or link in seen:
-                        continue
-                    if urlparse(link).netloc != entry_host:
-                        continue
-                    if len(article_results) >= max_links:
+                if item["url"] in seen:
+                    continue
+                seen.add(item["url"])
+
+                if is_article_link(item["url"]):
+                    article_results.append(item)
+                elif is_listing_link(item["url"]) and depth < max_depth:
+                    queue.append((item["url"], depth + 1))
+
+            # 自动翻页：检测"下一页"，推入同级队列（不消耗 depth）
+            if enable_pagination and url not in paginated_urls:
+                paginated_urls.add(url)
+                cur_html, cur_final = rendered["html"], final_url
+                for _ in range(max_pages):
+                    next_url = find_next_page_url(cur_html, cur_final)
+                    if not next_url or next_url in seen or next_url in paginated_urls:
                         break
-                    if link not in seen:
-                        seen.add(link)
-                        if is_article_link(link):
-                            article_results.append({"url": link, "score": score_link(link)})
+                    paginated_urls.add(next_url)
+                    try:
+                        next_rendered = await renderer.render(next_url, scroll_rounds_range=(2, 3))
+                    except Exception as e:
+                        logger.warning("pagination render failed: %s - %r", next_url, e)
+                        break
+                    if not next_rendered.get("ok"):
+                        break
+                    cur_final = next_rendered.get("final_url") or next_url
+                    cur_html = next_rendered["html"]
+                    page_links = extract_links(cur_html, cur_final)
+                    page_links = dedup_links(page_links)
+                    for link in page_links:
+                        if is_junk_link(link) or link in seen:
+                            continue
+                        if urlparse(link).netloc != entry_host:
+                            continue
+                        if len(article_results) >= max_links:
+                            break
+                        if link not in seen:
+                            seen.add(link)
+                            if is_article_link(link):
+                                article_results.append({"url": link, "score": score_link(link)})
 
     # 最终按评分降序返回
     article_results.sort(key=lambda x: x["score"], reverse=True)

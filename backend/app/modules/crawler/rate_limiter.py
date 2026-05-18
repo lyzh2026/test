@@ -29,6 +29,13 @@ class DomainRateLimiter:
         """获取许可：等待间隔 → 获取信号量。"""
         domain = self._get_domain(url)
         async with self._lock:
+            # 惰性清理无界增长的字典
+            if len(self._semaphores) > 500:
+                cutoff = time.monotonic() - 600
+                stale = [d for d, t in self._last_release.items() if t < cutoff]
+                for d in stale:
+                    self._semaphores.pop(d, None)
+                    self._last_release.pop(d, None)
             if domain not in self._semaphores:
                 self._semaphores[domain] = asyncio.Semaphore(settings.CRAWLER_DOMAIN_CONCURRENCY)
             last_time = self._last_release.get(domain, 0.0)
@@ -48,7 +55,9 @@ class DomainRateLimiter:
         domain = self._get_domain(url)
         async with self._lock:
             self._last_release[domain] = time.monotonic()
-        self._semaphores[domain].release()
+        sem = self._semaphores.get(domain)
+        if sem:
+            sem.release()
 
 
 domain_rate_limiter = DomainRateLimiter()

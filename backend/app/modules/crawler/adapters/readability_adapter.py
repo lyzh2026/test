@@ -116,8 +116,16 @@ _DATE_CHAR_PATTERN = re.compile(r"\d+[年月]|[昨今明前当去今明]日|\d+�
 
 # 发布日期专用关键词（更严格）
 _PUBLISH_DATE_KEYWORDS = {"发布时间", "发布日期", "更新于", "发布于", "发表于", "撰稿"}
-# 近期日期模式（2024-2026年，要求有日/号部分，用于区分历史日期和发布日期）
-_RECENT_DATE_PATTERN = re.compile(r"20(?:2[4-6])年(?:[1-9]|1[0-2])月(?:[1-9]|[12]\d|3[01])[日号]?|20(?:2[4-6])-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])")
+# 近期日期模式（动态年份：当前年和去年，要求有日/号部分，用于区分历史日期和发布日期）
+def _build_recent_date_pattern():
+    from datetime import date
+    y = date.today().year
+    year_alt = "|".join([str(y), str(y - 1)])
+    return re.compile(
+        rf"(?:{year_alt})年(?:[1-9]|1[0-2])月(?:[1-9]|[12]\d|3[01])[日号]?"
+        rf"|(?:{year_alt})-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])"
+    )
+_RECENT_DATE_PATTERN = _build_recent_date_pattern()
 
 
 def _has_date_hints(text: str) -> bool:

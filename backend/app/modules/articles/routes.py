@@ -24,17 +24,21 @@ router = APIRouter(prefix="/api/v1", tags=["articles"])
 
 
 async def _get_category_labels(session: AsyncSession) -> list[str]:
-    """从 SystemConfig 读取分类标签，无配置时返回默认值。"""
+    """从 SystemConfig 读取分类标签，无配置时返回默认值。始终包含"未分类"。"""
     result = await session.execute(
         select(SystemConfig).where(SystemConfig.key == "category_labels")
     )
     cfg = result.scalar_one_or_none()
     if cfg and cfg.value and isinstance(cfg.value, list):
-        return [str(l).strip() for l in cfg.value if str(l).strip()]
-    return [
-        "最新政策", "数字经济", "人工智能", "数据要素", "通信",
-        "申报", "潜在商机", "具身智能", "车路云协同", "新型工业化", "算力",
-    ]
+        labels = [str(l).strip() for l in cfg.value if str(l).strip()]
+    else:
+        labels = [
+            "最新政策", "数字经济", "人工智能", "数据要素", "通信",
+            "申报", "潜在商机", "具身智能", "车路云协同", "新型工业化", "算力",
+        ]
+    if "未分类" not in labels:
+        labels.append("未分类")
+    return labels
 
 
 def _serialize_article(article: Article, analysis: AIAnalysis | None) -> dict:
@@ -436,6 +440,10 @@ async def update_article_categories(
             return error(1001, "每个分类必须包含 label 字段", http_status=400, request=request)
         if c["label"] not in valid_labels:
             return error(1001, f"无效分类标签：{c['label']}", http_status=400, request=request)
+
+    # "未分类"具有排他性：有它就不能有别的标签
+    if any(c.get("label") == "未分类" for c in categories):
+        categories = [c for c in categories if c.get("label") == "未分类"][:1]
 
     article = await session.get(Article, article_id)
     if not article:

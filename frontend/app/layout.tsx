@@ -1,15 +1,8 @@
 import './globals.css';
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
-import { Noto_Sans_SC } from 'next/font/google';
 import { PageShell } from '@/components/layout/PageShell';
 import { ToastProvider } from '@/components/ui/Toast';
-
-const notoSansSC = Noto_Sans_SC({
-  subsets: ['latin'],
-  weight: ['300', '400', '500', '700'],
-  display: 'swap',
-});
 
 export const metadata: Metadata = {
   title: '拾讯 · 智能内容采集分发平台',
@@ -19,7 +12,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="zh-CN">
-      <body className={notoSansSC.className}>
+      <body style={{ fontFamily: 'system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans SC", sans-serif' }}>
         <ToastProvider><PageShell>{children}</PageShell></ToastProvider>
       </body>
     </html>

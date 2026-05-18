@@ -48,7 +48,7 @@ export function TaskProgress({
 
     function connectWs() {
       const wsBase = (window as any).NEXT_PUBLIC_WS_URL
-        || `ws://${window.location.hostname}:8000`;
+        || `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`;
       const ws = new WebSocket(`${wsBase}/api/v1/crawler/ws/task/${taskId}`);
 
       ws.onmessage = (e) => {

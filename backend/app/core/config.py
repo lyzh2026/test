@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     ALLOWED_DOMAINS: str = ""
 
     # Crawler
-    RENDER_POOL_SIZE: int = 3              # PRD 单 worker 上限 3
+    RENDER_POOL_SIZE: int = 8              # 并发页面渲染数
     RENDER_TIMEOUT_MS: int = 30000         # 单页面渲染硬上限 30s
     RENDER_SOFT_MEM_MB: int = 1024         # 软阈值 1.0 GB
     RENDER_HARD_MEM_MB: int = 1536         # 硬阈值 1.5 GB
@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     # === Renderer ===
     RENDER_BROWSER_RETIRE_AFTER: int = Field(default=30, description="每个浏览器进程最大页面数，超限后重启")
     RENDER_STEALTH_ENABLED: bool = Field(default=True, description="Stealth 反检测开关")
-    RENDER_CONTEXT_ISOLATION: bool = Field(default=True, description="每个 URL 独立 browser context")
+    RENDER_CONTEXT_ISOLATION: bool = Field(default=False, description="每个 URL 独立 browser context")
 
     # Redis
     REDIS_HOST: str = "redis"
