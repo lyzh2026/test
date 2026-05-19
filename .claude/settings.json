@@ -11,7 +11,10 @@
       "Bash(git commit *)",
       "Read(//d/移动/shixun/**)",
       "Read(//d/移动/**)",
-      "Read(//d//**)"
+      "Read(//d//**)",
+      "Bash(python generate_resume.py)",
+      "Bash(python analyze_resume.py)",
+      "Bash(python generate_resume_v2.py)"
     ]
   }
 }

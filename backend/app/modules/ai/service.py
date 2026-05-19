@@ -24,7 +24,7 @@ _DEFAULT_CATEGORY_LABELS = [
     "申报", "潜在商机", "具身智能", "车路云协同", "新型工业化", "算力",
 ]
 
-CATEGORY_THRESHOLD = 0.6
+CATEGORY_THRESHOLD = 0.3
 CATEGORY_TOP_K = 3
 FALLBACK_LABEL = "未分类"
 
@@ -124,7 +124,7 @@ async def _classify(client, model, title: str, content: str, labels: list[str]) 
     resp = await _retry_call(lambda: client.chat.completions.create(
         model=model,
         temperature=0.3,
-        max_tokens=1024,
+        max_tokens=2048,
         messages=[
             {"role": "system", "content": "你是严谨的中文文章分类器，必须只输出 JSON。"},
             {"role": "user", "content": prompt},

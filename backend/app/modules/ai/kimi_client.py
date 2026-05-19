@@ -3,7 +3,7 @@ import hashlib
 import logging
 from typing import Optional
 
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, Timeout
 from sqlalchemy import select
 
 from app.core.config import settings
@@ -64,7 +64,12 @@ async def get_llm_client() -> tuple[Optional[AsyncOpenAI], str]:
         return None, model
 
     if _client is None:
-        _client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        _client = AsyncOpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=Timeout(60.0, connect=10.0),
+            max_retries=0,
+        )
         _model = model
         logger.info("LLM client 已创建: base_url=%s, model=%s", base_url, model)
 

@@ -34,9 +34,9 @@ class Settings(BaseSettings):
     RENDER_SOFT_MEM_MB: int = 1024         # 软阈值 1.0 GB
     RENDER_HARD_MEM_MB: int = 1536         # 硬阈值 1.5 GB
     RENDER_IDLE_RECYCLE_SEC: int = 300     # 空闲 5 分钟回收
-    CRAWLER_DOMAIN_CONCURRENCY: int = 2    # 单域名并发
-    CRAWLER_DOMAIN_DELAY_MIN: float = 3.0   # 同域名请求最小间隔（秒）
-    CRAWLER_DOMAIN_DELAY_MAX: float = 6.0   # 同域名请求最大间隔（抖动用，秒）
+    CRAWLER_DOMAIN_CONCURRENCY: int = 4    # 单域名并发
+    CRAWLER_DOMAIN_DELAY_MIN: float = 1.0   # 同域名请求最小间隔（秒）
+    CRAWLER_DOMAIN_DELAY_MAX: float = 2.0   # 同域名请求最大间隔（抖动用，秒）
     CRAWLER_MAX_URLS_PER_TASK: int = 100   # PRD 单任务上限
     CRAWLER_MAX_RETRIES: int = 3            # 单 URL 最大重试次数
     CRAWLER_RETRY_BACKOFF_BASE: int = 2     # 退避基数（秒）

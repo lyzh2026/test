@@ -12,6 +12,12 @@ type AiConfig = {
   model: string;
 };
 
+type CustomPreset = {
+  label: string;
+  base_url: string;
+  model: string;
+};
+
 type TemplateStatus = {
   exists: boolean;
   filename: string | null;
@@ -22,14 +28,12 @@ const PRESETS: Record<string, { base_url: string; model: string }> = {
   kimi: { base_url: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-32k' },
   openai: { base_url: 'https://api.openai.com/v1', model: 'gpt-4o' },
   deepseek: { base_url: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
-  custom: { base_url: '', model: '' },
 };
 
 const PRESET_LABELS: Record<string, string> = {
   kimi: 'Kimi (Moonshot)',
   openai: 'OpenAI',
   deepseek: 'DeepSeek',
-  custom: '自定义',
 };
 
 type TabKey = 'ai' | 'categories' | 'template' | 'distribution';
@@ -65,6 +69,9 @@ export default function SettingsPage() {
   const [categoryInput, setCategoryInput] = useState('');
   const [savingCategories, setSavingCategories] = useState(false);
 
+  // Custom presets state
+  const [customPresets, setCustomPresets] = useState<CustomPreset[]>([]);
+
   // Data fetching
   const fetchConfig = useCallback(async () => {
     setLoading(true);
@@ -99,11 +106,21 @@ export default function SettingsPage() {
     }
   }, []);
 
+  const fetchCustomPresets = useCallback(async () => {
+    try {
+      const data = await api.get<{ presets: CustomPreset[] }>('/api/v1/admin/settings/ai-presets');
+      setCustomPresets(data.presets || []);
+    } catch {
+      // ignore
+    }
+  }, []);
+
   useEffect(() => {
     fetchConfig();
     fetchTemplate();
     fetchCategoryLabels();
-  }, [fetchConfig, fetchTemplate, fetchCategoryLabels]);
+    fetchCustomPresets();
+  }, [fetchConfig, fetchTemplate, fetchCategoryLabels, fetchCustomPresets]);
 
   // AI handlers
   function applyPreset(key: string) {
@@ -112,19 +129,41 @@ export default function SettingsPage() {
     if (p) {
       setBaseUrl(p.base_url);
       setModel(p.model);
+      return;
+    }
+    // 查找自定义预设
+    const cp = customPresets.find((_, i) => `custom_${i}` === key);
+    if (cp) {
+      setBaseUrl(cp.base_url);
+      setModel(cp.model);
     }
   }
 
   async function handleSave() {
-    if (!apiKey.trim() || !baseUrl.trim() || !model.trim()) return;
+    if (!baseUrl.trim() || !model.trim()) return;
     setSaving(true);
     try {
+      const saveProvider = provider === 'custom' ? 'custom' : provider;
       await api.put('/api/v1/admin/settings/ai', {
-        provider,
+        provider: saveProvider,
         api_key: apiKey.trim(),
         base_url: baseUrl.trim(),
         model: model.trim(),
       });
+
+      // 如果是自定义，自动保存为预设
+      if (provider === 'custom') {
+        const label = model.trim().split('/').pop() || model.trim();
+        const exists = customPresets.some(
+          p => p.base_url === baseUrl.trim() && p.model === model.trim()
+        );
+        if (!exists) {
+          const updated = [...customPresets, { label, base_url: baseUrl.trim(), model: model.trim() }];
+          await api.put('/api/v1/admin/settings/ai-presets', { presets: updated });
+          setCustomPresets(updated);
+        }
+      }
+
       toast('AI 配置已保存', 'success');
       setApiKey('');
     } catch (e: unknown) {
@@ -270,6 +309,52 @@ export default function SettingsPage() {
                     {label}
                   </button>
                 ))}
+                {customPresets.map((cp, i) => {
+                  const key = `custom_${i}`;
+                  return (
+                    <span key={key} className="relative inline-flex items-center">
+                      <button
+                        onClick={() => applyPreset(key)}
+                        className="px-3 py-1.5 text-xs rounded-lg transition-colors"
+                        style={{
+                          background: provider === key ? '#EEF2FF' : '#f4f4f5',
+                          color: provider === key ? '#3b82f6' : '#6b7280',
+                          border: provider === key ? '1px solid #93c5fd' : '1px solid transparent',
+                        }}
+                      >
+                        {cp.label}
+                      </button>
+                      <button
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          const updated = customPresets.filter((_, j) => j !== i);
+                          try {
+                            await api.put('/api/v1/admin/settings/ai-presets', { presets: updated });
+                            setCustomPresets(updated);
+                          } catch {
+                            toast('删除失败', 'error');
+                          }
+                        }}
+                        className="absolute -top-1 -right-1 w-4 h-4 rounded-full flex items-center justify-center text-[10px] leading-none opacity-0 hover:opacity-100 transition-opacity"
+                        style={{ background: '#ef4444', color: '#fff' }}
+                        title="删除"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  );
+                })}
+                <button
+                  onClick={() => { setProvider('custom'); setBaseUrl(''); setModel(''); }}
+                  className="px-3 py-1.5 text-xs rounded-lg transition-colors"
+                  style={{
+                    background: provider === 'custom' ? '#EEF2FF' : '#f4f4f5',
+                    color: provider === 'custom' ? '#3b82f6' : '#6b7280',
+                    border: provider === 'custom' ? '1px solid #93c5fd' : '1px solid transparent',
+                  }}
+                >
+                  自定义
+                </button>
               </div>
             </div>
 
@@ -330,7 +415,7 @@ export default function SettingsPage() {
 
             <div className="mt-6 rounded-lg px-4 py-3 text-xs" style={{ background: '#f9fafb', color: '#9ca3af' }}>
               <p className="font-medium mb-1" style={{ color: '#6b7280' }}>支持的模型</p>
-              <p>所有兼容 OpenAI Chat Completions API 的模型均可使用，包括 Kimi (Moonshot)、OpenAI、DeepSeek、通义千问等。</p>
+              <p>所有兼容 OpenAI Chat Completions API 的模型均可使用，包括 Kimi、DeepSeek、通义千问、智谱GLM、豆包、讯飞星火、OpenAI、Claude、Gemini 等。保存自定义配置后会自动添加为快捷按钮。</p>
             </div>
           </div>
         )}

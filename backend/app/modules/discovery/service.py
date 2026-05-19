@@ -46,9 +46,11 @@ async def discover_articles(
             batch.append(queue.popleft())
 
         async def _process_url(url: str, depth: int):
-            """渲染单个 URL，返回 (rendered, links, error)。"""
+            """渲染单个 URL，先 httpx 快速请求，失败再降级 Playwright。"""
             try:
-                rendered = await renderer.render(url, scroll_rounds_range=(2, 3))
+                rendered = await renderer.fast_fetch(url)
+                if not rendered:
+                    rendered = await renderer.render(url, scroll_rounds_range=(1, 2))
             except Exception as e:
                 logger.warning("render failed for discovery: %s - %r", url, e)
                 return url, depth, None, [], str(e)

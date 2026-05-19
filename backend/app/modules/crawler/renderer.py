@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 _httpx_client: httpx.AsyncClient | None = None
 
 # 判断页面是否需要 JS 渲染的最小标签数阈值
-_STATIC_MIN_TAGS = 20
+_STATIC_MIN_TAGS = 10
 
 _USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -115,7 +115,7 @@ class DynamicRenderer:
                 # 如果 body 内文本过短则降级
                 soup = await asyncio.to_thread(BeautifulSoup, html, "lxml")
                 body = soup.find("body")
-                if body and len(body.get_text(strip=True)) < 200:
+                if body and len(body.get_text(strip=True)) < 100:
                     return None
             title = ""
             try:
@@ -200,7 +200,7 @@ class DynamicRenderer:
         wait_selector: str = "body",
         min_content_length: int = 500,
         scroll: bool = True,
-        scroll_rounds_range: tuple[int, int] = (5, 10),
+        scroll_rounds_range: tuple[int, int] = (2, 3),
     ) -> dict:
         async with self._semaphore:
             start_ts = time.monotonic()
@@ -244,18 +244,10 @@ class DynamicRenderer:
 
             try:
                 resp = await page.goto(url, wait_until="domcontentloaded", timeout=settings.RENDER_TIMEOUT_MS)
-                try:
-                    await page.wait_for_selector(wait_selector, timeout=10_000)
-                except Exception:
-                    pass
                 if scroll:
                     # 随机滚动轮数
                     scroll_rounds = random.randint(*scroll_rounds_range)
                     await self._auto_scroll(page, scroll_rounds)
-                try:
-                    await page.wait_for_load_state("networkidle", timeout=5_000)
-                except Exception:
-                    pass
                 html = await page.content()
                 title = await page.title()
                 final_url = page.url

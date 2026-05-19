@@ -160,8 +160,6 @@ async def update_ai_settings(
     model = (payload.get("model") or "").strip()
     provider = (payload.get("provider") or "custom").strip()
 
-    if not api_key:
-        return error(1001, "API Key 不能为空", http_status=400, request=request)
     if not base_url:
         return error(1001, "Base URL 不能为空", http_status=400, request=request)
     if not model:
@@ -171,6 +169,8 @@ async def update_ai_settings(
         select(SystemConfig).where(SystemConfig.key == "ai_provider")
     )
     cfg = result.scalar_one_or_none()
+    if not api_key and cfg and cfg.value:
+        api_key = cfg.value.get("api_key", "")
     if cfg:
         cfg.value = {"provider": provider, "api_key": api_key, "base_url": base_url, "model": model}
     else:
@@ -186,6 +186,59 @@ async def update_ai_settings(
     clear_llm_cache()
 
     return success({"provider": provider, "base_url": base_url, "model": model}, request=request)
+
+
+# ── 自定义 AI 预设 ──────────────────────────────────────────
+
+
+@router.get("/settings/ai-presets")
+async def get_ai_presets(
+    request: Request,
+    _: object = Depends(current_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(
+        select(SystemConfig).where(SystemConfig.key == "ai_custom_presets")
+    )
+    cfg = result.scalar_one_or_none()
+    if cfg and cfg.value and isinstance(cfg.value, list):
+        return success({"presets": cfg.value}, request=request)
+    return success({"presets": []}, request=request)
+
+
+@router.put("/settings/ai-presets")
+async def update_ai_presets(
+    payload: dict,
+    request: Request,
+    _: object = Depends(current_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    presets = payload.get("presets", [])
+    if not isinstance(presets, list):
+        return error(1001, "presets 必须为数组", http_status=400, request=request)
+
+    cleaned = []
+    for p in presets:
+        if not isinstance(p, dict):
+            continue
+        label = (p.get("label") or "").strip()
+        base_url = (p.get("base_url") or "").strip()
+        model = (p.get("model") or "").strip()
+        if label and base_url and model:
+            cleaned.append({"label": label, "base_url": base_url, "model": model})
+
+    result = await session.execute(
+        select(SystemConfig).where(SystemConfig.key == "ai_custom_presets")
+    )
+    cfg = result.scalar_one_or_none()
+    if cfg:
+        cfg.value = cleaned
+    else:
+        cfg = SystemConfig(key="ai_custom_presets", value=cleaned)
+        session.add(cfg)
+    await session.commit()
+
+    return success({"presets": cleaned}, request=request)
 
 
 @router.post("/settings/ai/test")

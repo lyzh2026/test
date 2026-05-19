@@ -10,6 +10,7 @@ class RenderedPage:
     final_url: str
     html: str
     title: str | None = None
+    extra: dict = field(default_factory=dict)  # 额外信息（如可能的过期日期）
 
 
 @dataclass

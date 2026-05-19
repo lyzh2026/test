@@ -324,11 +324,8 @@ class ReadabilityAdapter(SpiderAdapter):
                 logger.debug("completeness check failed: %s reason=%s", page.url, completeness_reason)
                 return None
 
-            publish_date = _guess_publish_date(page.html)
-            # 没提取到日期，且正文缺少时间线索 → 非文章，交给 LLM 二次确认
-            if not publish_date and not _has_date_hints(content_text):
-                return None
-
+            # 没提取到日期时，仍返回结果（publish_date=None），让 LLMExtractionAdapter 尝试补充
+            # 只有正文内容完全不合格时才返回 None
             # 图片/附件提取
             images = _extract_images(content_html)
             attachments = _extract_attachments(page.html)
@@ -337,8 +334,8 @@ class ReadabilityAdapter(SpiderAdapter):
                 original_title=title,
                 raw_content=content_text,
                 source_unit=_guess_source_unit(page.html),
-                publish_date=publish_date,
-                confidence=0.9,
+                publish_date=publish_date,  # 可能为 None，由 LLM 补充
+                confidence=0.7 if not publish_date else 0.9,  # 无日期时降低置信度
                 extra={
                     "content_format": "markdown",
                     "images": images,

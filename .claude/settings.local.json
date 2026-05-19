@@ -209,7 +209,11 @@
       "Bash(curl -s -b /tmp/cookies14.txt http://localhost:3000/tasks)",
       "Bash(curl -s -c /tmp/cookies15.txt -X POST http://localhost:8000/api/v1/auth/login -H 'Content-Type: application/json' -d '{\"username\":\"admin\",\"password\":\"sunshine2026\"}')",
       "Bash(curl -s -b /tmp/cookies15.txt http://localhost:8000/api/v1/crawler/tasks/6546dd64-ff9f-4c0f-afa6-7f66f26ea283)",
-      "Bash(curl -s -b /tmp/cookies15.txt http://localhost:3000/tasks/6546dd64-ff9f-4c0f-afa6-7f66f26ea283)"
+      "Bash(curl -s -b /tmp/cookies15.txt http://localhost:3000/tasks/6546dd64-ff9f-4c0f-afa6-7f66f26ea283)",
+      "WebFetch(domain:api.github.com)",
+      "Bash(git -c http.proxy=\"\" -c https.proxy=\"\" fetch origin)",
+      "Bash(git stash *)",
+      "Bash(findstr -i \"docker\")"
     ],
     "additionalDirectories": [
       "D:\\移动\\shixun\\shixun\\%temp%",

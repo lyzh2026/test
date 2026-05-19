@@ -656,6 +656,18 @@ async def _crawl_one_attempt(task_id: str, url: str, *, target_date: date, date_
         else:
             filtered_html = raw_html
 
+        # ====== 快速日期预检：仅作参考，不直接跳过（允许后续适配器补充/修正日期）=====
+        _head = raw_html[:3000]  # 只检查头部 3KB
+        quick_date = _extract_date_from_html(_head)
+        extra: dict = {}
+        if quick_date:
+            date_to_val = date_to or target_date
+            if not (target_date <= quick_date <= date_to_val):
+                logger.debug("date quick-check: page may be old (publish=%s, range=%s~%s)", url, quick_date, target_date, date_to_val)
+                extra["quick_check_old_date"] = quick_date  # 标记可能被快速检查过滤，但允许继续
+            else:
+                extra["quick_check_valid_date"] = quick_date
+
         # ====== 写入缓存（异步，不阻塞） ======
         if settings.CRAWLER_CACHE_ENABLED and page_cache:
             try:
@@ -668,6 +680,7 @@ async def _crawl_one_attempt(task_id: str, url: str, *, target_date: date, date_
             final_url=final_url,
             html=filtered_html,
             title=title,
+            extra=extra,
         )
 
     # 静态信息页标题拦截（避免浪费 LLM 调用）
@@ -685,11 +698,21 @@ async def _crawl_one_attempt(task_id: str, url: str, *, target_date: date, date_
 
     draft = None
     last_reason = "ALL_ADAPTERS_FAILED"
+    readability_failed = False
+
     for adapter in _ADAPTERS:
-        # Readability 失败且页面无日期线索 → 跳过 LLM（避免静态页浪费 API 调用）
-        if adapter.name == "llm_extraction" and not _has_publish_date_hints(_html_to_plaintext(page.html)[:5000]):
-            last_reason = "llm_skipped_no_date_hints"
-            break
+        # LLMExtractionAdapter 只在纯静态页时才跳过（无任何日期线索）
+        # 如果有快速检查标记的日期（即使不在范围内），也应该给 LLM 机会补充/修正
+        if adapter.name == "llm_extraction":
+            page_text = _html_to_plaintext(page.html)[:5000]
+            no_date_hints = not _has_publish_date_hints(page_text)
+            has_quick_date = "quick_check_valid_date" in page.extra or "quick_check_old_date" in page.extra
+
+            # 如果没有日期线索且没有快速检查标记，才跳过 LLM
+            if no_date_hints and not has_quick_date:
+                last_reason = "llm_skipped_no_date_hints"
+                break
+
         try:
             d = await adapter.extract(page)
             if adapter.validate(d):
@@ -697,9 +720,17 @@ async def _crawl_one_attempt(task_id: str, url: str, *, target_date: date, date_
                 break
             else:
                 last_reason = f"{adapter.name}: validate failed"
+                # ReadabilityAdapter 验证失败时，记录并继续下一个适配器（LLM）
+                if adapter.name == "readability":
+                    readability_failed = True
+                    logger.debug("readability validation failed, trying LLM: %s reason=%s", url, last_reason)
         except Exception as e:
             logger.warning("adapter %s failed for %s: %r", adapter.name, url, e)
             last_reason = f"{adapter.name}: {e!r}"
+            # ReadabilityAdapter 异常时，应该给 LLMExtractionAdapter 机会
+            if adapter.name == "readability":
+                readability_failed = True
+
     if not draft:
         return {"ok": True, "filtered": True, "code": 2002, "reason": last_reason, "stage": "extract"}
 
@@ -1155,6 +1186,60 @@ _MD_BOLD_RE = re.compile(r'\*{1,2}(.+?)\*{1,2}', re.DOTALL)
 
 # 连续空行压缩
 _MULTI_BLANK_RE = re.compile(r'\n{3,}')
+
+# ====== 快速日期预检：从 HTML 头部轻量提取发布日期 ======
+_DATE_META_RE = re.compile(
+    r'<meta\s+(?:[^>]*?(?:property|name)\s*=\s*["\'](?:article:published_time|publish_date|date|pubdate|og:release_date)["\'][^>]*?content\s*=\s*["\']([^"\']+)["\']'
+    r'|[^>]*?content\s*=\s*["\']([^"\']+)["\'][^>]*?(?:property|name)\s*=\s*["\'](?:article:published_time|publish_date|date|pubdate|og:release_date)["\'])',
+    re.I,
+)
+_DATE_TIME_RE = re.compile(r'<time[^>]*?datetime\s*=\s*["\']([^"\']+)["\']', re.I)
+_DATE_TEXT_RE = re.compile(r'20\d{2}[-/.年]\d{1,2}[-/.月]\d{1,2}')
+_DATE_ISO_RE = re.compile(r'20\d{2}-\d{2}-\d{2}')
+
+
+def _extract_date_from_html(html_head: str) -> date | None:
+    """从 HTML 头部（<meta>/<time>/文本）快速提取发布日期，失败返回 None。"""
+    # 1. <meta> 标签
+    m = _DATE_META_RE.search(html_head)
+    if m:
+        ds = m.group(1) or m.group(2)
+        d = _parse_date_str(ds)
+        if d:
+            return d
+    # 2. <time> 标签
+    m = _DATE_TIME_RE.search(html_head)
+    if m:
+        d = _parse_date_str(m.group(1))
+        if d:
+            return d
+    # 3. 正文中的日期文本（取第一个匹配）
+    m = _DATE_TEXT_RE.search(html_head)
+    if m:
+        d = _parse_date_str(m.group(0))
+        if d:
+            return d
+    return None
+
+
+def _parse_date_str(s: str) -> date | None:
+    """尝试从字符串解析日期，支持 ISO / 中文 / 常见格式。"""
+    s = s.strip()[:20]
+    # ISO 格式
+    m = _DATE_ISO_RE.search(s)
+    if m:
+        try:
+            return date.fromisoformat(m.group(0))
+        except ValueError:
+            pass
+    # 中文格式：2026年05月18日
+    m = re.search(r'(\d{4})\D+(\d{1,2})\D+(\d{1,2})', s)
+    if m:
+        try:
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            pass
+    return None
 
 
 def _clean_news_noise(text: str) -> str:

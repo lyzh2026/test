@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic';
 function LoginForm() {
   const router = useRouter();
   const search = useSearchParams();
-  const next = search.get('next') || '/dashboard';
+  const next = search.get('next') || '/tasks/new';
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
