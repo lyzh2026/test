@@ -670,6 +670,19 @@ async def _crawl_one_attempt(task_id: str, url: str, *, target_date: date, date_
             title=title,
         )
 
+    # 静态信息页标题拦截（避免浪费 LLM 调用）
+    _STATIC_TITLE_KW = {
+        "学校沿革", "历史沿革", "沿革", "学校简介", "学校概况", "关于我们", "简介",
+        "机构设置", "部门设置", "组织架构", "领导介绍", "领导班子", "现任领导", "历任领导",
+        "校园风光", "校园地图", "招生就业", "招生信息", "师资队伍", "师资力量",
+        "学科建设", "专业设置", "校史", "校训", "校歌", "联系我们", "联系方式",
+        "信息公开", "规章制度", "校友会", "图书馆", "档案馆",
+        "党建工作", "安全保卫", "后勤服务", "合作交流", "国际交流",
+    }
+    if any((title or "") == kw or (title or "").endswith(kw) for kw in _STATIC_TITLE_KW):
+        logger.info("static page filtered by title: %s", url)
+        return {"ok": True, "filtered": True, "code": 2003, "reason": "static_page", "stage": "title_filter"}
+
     draft = None
     last_reason = "ALL_ADAPTERS_FAILED"
     for adapter in _ADAPTERS:

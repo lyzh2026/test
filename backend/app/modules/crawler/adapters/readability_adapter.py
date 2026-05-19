@@ -257,6 +257,27 @@ def _detect_language(text: str) -> str | None:
 class ReadabilityAdapter(SpiderAdapter):
     name = "readability"
 
+    # 静态信息页标题黑名单（命中即跳过，不做内容提取）
+    _STATIC_TITLE_KEYWORDS = {
+        "学校沿革", "历史沿革", "沿革", "学校简介", "学校概况", "关于我们", "简介",
+        "机构设置", "部门设置", "组织架构", "内设机构", "机构职能",
+        "领导介绍", "领导班子", "现任领导", "历任领导", "领导信箱",
+        "校园风光", "校园地图", "校园导览", "校区介绍",
+        "招生就业", "招生信息", "招生简章", "本科招生", "研究生招生",
+        "师资队伍", "师资力量", "名师风采", "教师风采", "杰出人才",
+        "学科建设", "专业设置", "重点学科", "学科简介",
+        "校史", "校训", "校歌", "校徽", "校庆",
+        "联系我们", "联系方式", "交通指南", "来校路线",
+        "信息公开", "信息公开指南", "信息公开目录",
+        "规章制度", "政策法规",
+        "校友会", "校友总会", "教育基金会",
+        "图书馆", "档案馆", "网络中心",
+        "校园文化", "学生工作", "学生社团",
+        "合作交流", "国际交流", "国际合作",
+        "党建工作", "思政工作", "纪检监察",
+        "安全保卫", "后勤服务", "物业服务",
+    }
+
     def validate(self, draft: ArticleDraft | None) -> bool:
         if not super().validate(draft):
             return False
@@ -280,6 +301,11 @@ class ReadabilityAdapter(SpiderAdapter):
         try:
             doc = Document(page.html)
             title = (doc.short_title() or page.title or "").strip()
+            # 标题黑名单过滤：静态信息页直接跳过（后缀匹配，避免误杀新闻标题）
+            for kw in self._STATIC_TITLE_KEYWORDS:
+                if title == kw or title.endswith(kw):
+                    logger.debug("static page filtered by title keyword '%s': %s", kw, page.url)
+                    return None
             content_html = doc.summary(html_partial=True)
             content_text = _html_to_markdown(content_html)
             # 标签密度检测：文本占比过低说明页面主要是导航/链接，非真实文章

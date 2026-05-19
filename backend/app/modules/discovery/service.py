@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 from app.modules.crawler.renderer import renderer
 from app.modules.discovery.link_extractor import (
     dedup_links,
-    extract_links,
+    extract_links_with_text,
     find_next_page_url,
     is_article_link,
     is_junk_link,
@@ -63,8 +63,8 @@ async def discover_articles(
                 continue
 
             final_url = rendered.get("final_url") or url
-            links = extract_links(rendered["html"], final_url)
-            links = dedup_links(links)
+            links = extract_links_with_text(rendered["html"], final_url)
+            links = dedup_links([u for u, _ in links])
 
             candidates: list[dict] = []
             for link in links:
@@ -106,8 +106,8 @@ async def discover_articles(
                         break
                     cur_final = next_rendered.get("final_url") or next_url
                     cur_html = next_rendered["html"]
-                    page_links = extract_links(cur_html, cur_final)
-                    page_links = dedup_links(page_links)
+                    page_links = extract_links_with_text(cur_html, cur_final)
+                    page_links = dedup_links([u for u, _ in page_links])
                     for link in page_links:
                         if is_junk_link(link) or link in seen:
                             continue

@@ -5,6 +5,46 @@ from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 
+# 静态信息页锚文本/标题黑名单（命中任一即跳过）
+_STATIC_PAGE_KEYWORDS = {
+    "学校沿革", "历史沿革", "沿革", "学校简介", "学校概况", "关于我们", "简介",
+    "机构设置", "部门设置", "组织架构", "内设机构", "机构职能",
+    "领导介绍", "领导班子", "现任领导", "历任领导", "领导信箱",
+    "校园风光", "校园地图", "校园导览", "校区介绍",
+    "招生就业", "招生信息", "招生简章", "本科招生", "研究生招生",
+    "师资队伍", "师资力量", "名师风采", "教师风采", "杰出人才",
+    "学科建设", "专业设置", "重点学科", "学科简介",
+    "校史", "校训", "校歌", "校徽", "校庆",
+    "联系我们", "联系方式", "交通指南", "来校路线",
+    "信息公开", "信息公开指南", "信息公开目录",
+    "规章制度", "政策法规",
+    "校友会", "校友总会", "教育基金会",
+    "图书馆", "档案馆", "网络中心",
+    "校园文化", "学生工作", "学生社团",
+    "合作交流", "国际交流", "国际合作",
+    "党建工作", "思政工作", "纪检监察",
+    "安全保卫", "后勤服务", "物业服务",
+}
+
+
+def _is_static_page_link(link_text: str, url: str) -> bool:
+    """锚文本或 URL 路径是否指向静态信息页（非文章）。"""
+    text = link_text.strip()
+    for kw in _STATIC_PAGE_KEYWORDS:
+        if text == kw or text.endswith(kw):
+            return True
+    # URL 路径中包含关键词拼音/英文也拦截
+    lower_url = url.lower()
+    _URL_BLOCK = [
+        "about", "contact", "overview", "history", "introduction",
+        "organization", "leadership", "campus", "enrollment",
+        "faculty", "discipline", "xxgk", "xxjj", "jgsz",
+    ]
+    for seg in _URL_BLOCK:
+        if f"/{seg}" in lower_url or f"/{seg}/" in lower_url:
+            return True
+    return False
+
 # 文章 URL 的启发式加分模式
 ARTICLE_PATTERNS = [
     (r"/article[s]?/", 2),
@@ -75,6 +115,25 @@ def extract_links(html: str, base_url: str) -> list[str]:
         absolute = absolute.split("#")[0]
         if absolute:
             results.append(absolute)
+    return results
+
+
+def extract_links_with_text(html: str, base_url: str) -> list[tuple[str, str]]:
+    """从 HTML 中提取链接及其锚文本，过滤静态信息页。"""
+    soup = BeautifulSoup(html, "lxml")
+    results = []
+    for tag in soup.find_all("a", href=True):
+        href = tag["href"].strip()
+        if not href:
+            continue
+        absolute = urljoin(base_url, href)
+        absolute = absolute.split("#")[0]
+        if not absolute:
+            continue
+        link_text = tag.get_text(strip=True)
+        if _is_static_page_link(link_text, absolute):
+            continue
+        results.append((absolute, link_text))
     return results
 
 

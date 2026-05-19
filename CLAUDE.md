@@ -127,6 +127,15 @@
 
 ---
 
+## Docker 部署规范
+
+- **代码修改后必须更新容器**：每次修改 `backend/` 或 `frontend/` 下的代码后，必须执行 `docker compose up -d --build` 重建并重启对应服务，确保容器内的代码与本地一致。不要假设容器会自动同步本地文件。
+- 修改后端代码 → `docker compose up -d --build fastapi`
+- 修改前端代码 → `docker compose up -d --build nextjs`
+- 修改了依赖（requirements.txt / package.json）→ `docker compose up -d --build`（全量重建）
+
+---
+
 ## 路径与资源引用规范
 
 ### 1. 禁止绝对路径
