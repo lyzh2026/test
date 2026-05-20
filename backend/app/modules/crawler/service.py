@@ -751,6 +751,20 @@ async def _crawl_one_attempt(task_id: str, url: str, *, target_date: date, date_
     # 清洗新闻噪音（图片署名、标题块等）
     draft.raw_content = _clean_news_noise(draft.raw_content)
 
+    # 文章质量评分：过滤静态信息页（国歌、经济数据简表等非文章内容）
+    # 信号1: 正文过短 → 非文章内容
+    # 信号2: 无发布日期 → 静态信息页通常没有日期
+    _quality_score = 0
+    content_len = len(draft.raw_content or "")
+    if content_len < 500:
+        _quality_score -= 1
+    if not draft.publish_date:
+        _quality_score -= 1
+    if _quality_score <= -2:
+        logger.info("quality filter: skip %s (score=%d, len=%d, has_date=%s)",
+                    url, _quality_score, content_len, bool(draft.publish_date))
+        return {"ok": True, "filtered": True, "code": 2004, "reason": "low_quality", "stage": "quality_filter"}
+
     # 日期过滤：页面有明确日期且在时间段外时跳过
     date_to_val = date_to or target_date
     if draft.publish_date and not (target_date <= draft.publish_date <= date_to_val):
