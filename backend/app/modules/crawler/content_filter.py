@@ -55,19 +55,18 @@ class Pruning:
 
 
 def _remove_low_value_nodes(tree: etree._Element):
-    """移除 class/id 匹配黑关键词的节点。"""
+    """移除 class/id 匹配黑名单关键词的节点（按 token 匹配，避免子串误杀）。"""
     for node in list(tree.iter()):
         if node.tag not in ("div", "section", "aside", "nav", "footer", "header"):
             continue
         cls = node.get("class", "") or ""
         nid = node.get("id", "") or ""
-        combined = f"{cls} {nid}".lower()
-        for kw in _LOW_VALUE_KEYWORDS:
-            if kw in combined:
-                parent = node.getparent()
-                if parent is not None:
-                    parent.remove(node)
-                break
+        # 按空格/连字符/下划线拆分为 token，避免 "ad" 误匹配 "breadNav"
+        tokens = set(re.split(r"[\s\-_]+", f"{cls} {nid}".lower()))
+        if tokens & _LOW_VALUE_KEYWORDS:
+            parent = node.getparent()
+            if parent is not None:
+                parent.remove(node)
 
 
 def _remove_low_density_nodes(tree: etree._Element, min_density: float):

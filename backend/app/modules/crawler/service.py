@@ -615,12 +615,12 @@ async def _crawl_one_attempt(task_id: str, url: str, *, target_date: date, date_
         cached = await page_cache.get(url)
         if cached:
             logger.debug("cache hit: %s", url)
-            filtered_html = cached.get("filtered_html") or cached.get("pruned_html", "")
+            raw_html = cached.get("filtered_html") or cached.get("pruned_html", "")
             title = cached.get("title", "")
             page = RenderedPage(
                 url=url,
                 final_url=url,
-                html=filtered_html,
+                html=raw_html,
                 title=title,
             )
             goto_extract = True
@@ -678,7 +678,7 @@ async def _crawl_one_attempt(task_id: str, url: str, *, target_date: date, date_
         page = RenderedPage(
             url=url,
             final_url=final_url,
-            html=filtered_html,
+            html=raw_html,  # 适配器使用原始 HTML 提取（Readability 自带去噪）
             title=title,
             extra=extra,
         )
@@ -720,10 +720,24 @@ async def _crawl_one_attempt(task_id: str, url: str, *, target_date: date, date_
                 break
             else:
                 last_reason = f"{adapter.name}: validate failed"
-                # ReadabilityAdapter 验证失败时，记录并继续下一个适配器（LLM）
+                # Readability 验证失败：尝试 BM25 过滤后重试
                 if adapter.name == "readability":
                     readability_failed = True
-                    logger.debug("readability validation failed, trying LLM: %s reason=%s", url, last_reason)
+                    if settings.CONTENT_FILTER_ENABLED:
+                        try:
+                            filtered_html = await asyncio.to_thread(_dual_filter_pipeline, page.html)
+                            if filtered_html and len(filtered_html) > 100:
+                                retry_page = RenderedPage(
+                                    url=page.url, final_url=page.final_url,
+                                    html=filtered_html, title=page.title, extra=page.extra,
+                                )
+                                d2 = await adapter.extract(retry_page)
+                                if adapter.validate(d2):
+                                    draft = d2
+                                    break
+                        except Exception as filter_err:
+                            logger.debug("BM25 fallback failed for %s: %r", url, filter_err)
+                    logger.debug("readability failed, trying LLM: %s reason=%s", url, last_reason)
         except Exception as e:
             logger.warning("adapter %s failed for %s: %r", adapter.name, url, e)
             last_reason = f"{adapter.name}: {e!r}"

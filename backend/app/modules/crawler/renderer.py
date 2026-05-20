@@ -105,21 +105,16 @@ class DynamicRenderer:
             tag_count = html.count("<") + html.count("</")
             if tag_count < _STATIC_MIN_TAGS:
                 return None
-            # 检测常见 JS 渲染框架的空壳标记
-            lower = html.lower()
-            if any(marker in lower for marker in [
-                "id=\"__next\"", "id=\"__nuxt\"", "id=\"app\"", "id=\"root\"",
-                "<noscript>", "window.__INITIAL_STATE__",
-            ]):
-                # 有 JS 框架标记但标签数够多，可能是 SSR 页面，仍可尝试
-                # 如果 body 内文本过短则降级
-                soup = await asyncio.to_thread(BeautifulSoup, html, "lxml")
-                body = soup.find("body")
-                if body and len(body.get_text(strip=True)) < 100:
-                    return None
+            # text-to-tag ratio：比值过低说明内容靠 JS 动态加载（行业标准阈值 0.1）
+            # 但保留绝对值保护：body 文本 > 500 字符的页面即使比值低也认为有内容
+            soup = await asyncio.to_thread(BeautifulSoup, html, "lxml")
+            body = soup.find("body")
+            body_text_len = len(body.get_text(strip=True)) if body else 0
+            text_ratio = body_text_len / max(len(html), 1)
+            if text_ratio < 0.1 and body_text_len < 500:
+                return None
             title = ""
             try:
-                soup = await asyncio.to_thread(BeautifulSoup, html, "lxml")
                 t = soup.find("title")
                 if t:
                     title = t.get_text(strip=True)
@@ -226,7 +221,7 @@ class DynamicRenderer:
                 )
                 context = await self._browser.new_context(**context_kwargs)
             else:
-                if self._shared_context is None or self._shared_context.is_closed():
+                if self._shared_context is None:
                     self._shared_context = await self._browser.new_context(
                         user_agent=_random_ua(),
                         viewport=random_viewport(),
@@ -234,7 +229,18 @@ class DynamicRenderer:
                         timezone_id="Asia/Shanghai",
                     )
                 context = self._shared_context
-            page = await context.new_page()
+            # 如果共享 context 已失效，重建
+            try:
+                page = await context.new_page()
+            except Exception:
+                self._shared_context = await self._browser.new_context(
+                    user_agent=_random_ua(),
+                    viewport=random_viewport(),
+                    locale="zh-CN",
+                    timezone_id="Asia/Shanghai",
+                )
+                context = self._shared_context
+                page = await context.new_page()
 
             # Stealth：注入增强反检测脚本
             response_headers: dict = {}
