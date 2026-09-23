@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { api, ApiError } from '@/lib/api';
 import { useToast } from '@/components/ui/Toast';
 import { DistributionPanel } from '@/components/admin/DistributionPanel';
+import AiBrowserPanel from '@/components/settings/AiBrowserPanel';
 
 type AiConfig = {
   provider: string;
@@ -36,13 +37,14 @@ const PRESET_LABELS: Record<string, string> = {
   deepseek: 'DeepSeek',
 };
 
-type TabKey = 'ai' | 'categories' | 'template' | 'distribution';
+type TabKey = 'ai' | 'categories' | 'template' | 'distribution' | 'aibrowser';
 
 const TABS: { key: TabKey; label: string; icon: string }[] = [
   { key: 'ai', label: 'AI 模型', icon: '◈' },
   { key: 'categories', label: '分类标签', icon: '⊞' },
   { key: 'template', label: '导出模板', icon: '↗' },
   { key: 'distribution', label: '分发通道', icon: '◉' },
+  { key: 'aibrowser', label: '渲染兜底', icon: '⇄' },
 ];
 
 export default function SettingsPage() {
@@ -531,6 +533,13 @@ export default function SettingsPage() {
         {tab === 'distribution' && (
           <div className="animate-fade-in">
             <DistributionPanel />
+          </div>
+        )}
+
+        {/* 渲染兜底（AI Browser） */}
+        {tab === 'aibrowser' && (
+          <div className="animate-fade-in">
+            <AiBrowserPanel />
           </div>
         )}
       </div>
