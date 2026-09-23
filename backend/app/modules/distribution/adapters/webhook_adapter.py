@@ -31,6 +31,14 @@ def _build_feishu_card(report: WeeklyReport) -> dict:
         elements.append({"tag": "markdown", "content": "\n".join(lines)})
         elements.append({"tag": "hr"})
 
+    if report.health:
+        h = report.health
+        lines = [f"系统健康度：总请求 **{h.total_attempts}**，失败 **{h.fail_count}**，失败率 **{h.fail_rate:.0%}**"]
+        for s in h.degraded_sites:
+            lines.append(f"- {s.domain}：{s.fail_count}/{s.attempts}（{s.fail_rate:.0%}）")
+        elements.append({"tag": "hr"})
+        elements.append({"tag": "markdown", "content": "\n".join(lines)})
+
     if len(elements) > _MAX_ELEMENTS:
         elements = elements[:_MAX_ELEMENTS]
         elements.append({"tag": "markdown", "content": f"… 共 {report.stats.total_articles} 篇，完整内容请查看邮件"})
