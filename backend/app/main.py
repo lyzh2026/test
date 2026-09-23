@@ -84,6 +84,13 @@ async def lifespan(app: FastAPI):
         trigger=CronTrigger(day_of_week="mon", hour=8, minute=30),
         replace_existing=True,
     )
+    from app.modules.crawler.promotion import promote_render_policies
+    scheduler.add_job(
+        promote_render_policies,
+        id="promote_render_policies",
+        trigger=CronTrigger(hour=3, minute=17),
+        replace_existing=True,
+    )
     from app.modules.crawler.scheduled_service import restore_scheduled_crawls
     await restore_scheduled_crawls()
 
