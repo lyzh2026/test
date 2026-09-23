@@ -22,8 +22,10 @@ beautifulsoup4==4.12.3
 markdownify>=0.13.0
 langdetect>=1.0.9
 
-# AI Browser 兜底（渲染链第 ④ 层，需 Python >=3.11，会拖入 langchain 全家桶）
-browser-use>=0.2.0,<1.0
+# AI Browser 兜底（渲染链第 ④ 层）：接口保留在 app/modules/crawler/ai_browser.py，
+# 暂不安装依赖——browser-use 0.13.x 用 == 精确锁死 40 个包（pydantic/psutil/httpx/openai 等），
+# 与现有 pin 不可调和。未安装时该层自动降级为返回失败原因，其余三层链路不受影响。
+# browser-use>=0.2.0,<1.0
 
 # AI
 openai==1.30.1
