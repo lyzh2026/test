@@ -4,7 +4,7 @@ import hashlib
 import logging
 import random
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urlparse, urlunparse
 
 from sqlalchemy import select
@@ -21,7 +21,7 @@ from app.models.article import Article
 from app.models.crawler_task import CrawlerTask
 from app.modules.crawler.adapters.base import RenderedPage, SpiderAdapter
 from app.modules.crawler.adapters.llm_extraction_adapter import LLMExtractionAdapter
-from app.modules.crawler.adapters.readability_adapter import ReadabilityAdapter, _has_date_hints, _has_publish_date_hints, _html_to_plaintext
+from app.modules.crawler.adapters.readability_adapter import ReadabilityAdapter, _extract_date_from_text, _has_date_hints, _has_publish_date_hints, _html_to_plaintext
 from app.modules.crawler.pagination import find_article_next_page
 from app.modules.crawler.progress_bus import ProgressEvent, progress_bus
 from app.modules.crawler.rate_limiter import domain_rate_limiter
@@ -208,6 +208,9 @@ async def submit_task(
     return task
 
 
+_DISCOVERY_DATE_BUFFER_DAYS = 0  # 发现阶段精确日期（无缓冲），与爬虫严格过滤一致
+
+
 async def _run_discovery_and_crawl(
     task_id: str,
     entry_urls: list[str],
@@ -224,14 +227,20 @@ async def _run_discovery_and_crawl(
     discovered: set[str] = set()
     failed_details: list[dict] = []
 
+    # 发现范围精确等于任务范围（取消 ±15 天缓冲，精确日期爬虫无需扩大窗口）
+    disc_target = target_date
+    disc_date_to = date_to or target_date
+
     async def _discover_one(entry: str):
         try:
             links = await discover_articles(
                 entry_url=entry,
-                max_depth=2,
-                max_links=50,
+                max_depth=3,
+                max_links=100,
                 enable_pagination=True,
                 max_pages=5,
+                target_date=disc_target,
+                date_to=disc_date_to,
             )
             return entry, links, None
         except Exception as e:
@@ -335,6 +344,7 @@ async def run_crawl_job(task_id: str, urls: list[str]):
     total = len(urls)
     completed = 0
     failed = 0
+    filtered = 0
     final_status = "failed"
     fatal_error: str | None = None
 
@@ -345,7 +355,7 @@ async def run_crawl_job(task_id: str, urls: list[str]):
         ))
 
         async def _one(url: str):
-            nonlocal completed, failed
+            nonlocal completed, failed, filtered
             if task_id in _cancelled_tasks:
                 return None
             async with _task_concurrency_sem:
@@ -364,7 +374,7 @@ async def run_crawl_job(task_id: str, urls: list[str]):
             elif isinstance(res, dict) and res.get("ok"):
                 completed += 1
             elif isinstance(res, dict) and (res.get("dedup") or res.get("filtered")):
-                completed += 1
+                filtered += 1
             else:
                 failed += 1
             # 断点续爬：标记此 URL 已处理（成功或失败都标记，避免重试死循环）
@@ -466,6 +476,8 @@ async def run_crawl_job(task_id: str, urls: list[str]):
             if task_id in _cancelled_tasks:
                 t.status = "cancelled"
                 _cancelled_tasks.discard(task_id)
+            elif failed == 0 and completed == 0 and filtered > 0:
+                t.status = "partial_failed"  # 全部被过滤，无实际入库文章
             elif failed == 0:
                 t.status = "completed"
             elif completed == 0:
@@ -623,16 +635,22 @@ async def _crawl_one_attempt(task_id: str, url: str, *, target_date: date, date_
                 html=raw_html,
                 title=title,
             )
+            raw_page = page  # 缓存命中时 raw_page 与 page 相同
             goto_extract = True
 
     if not goto_extract:
-        # ====== 渲染（先尝试 httpx 快速请求，失败再用 Playwright） ======
+        # ====== 渲染（域名指纹 → httpx 快速请求 → Playwright） ======
         try:
-            rendered = await renderer.fast_fetch(url)
-            if rendered and rendered.get("ok"):
-                logger.debug("httpx fast fetch: %s", url)
-            else:
+            if renderer.needs_playwright(url):
                 rendered = await renderer.render(url)
+            else:
+                rendered = await renderer.fast_fetch(url)
+                if rendered and rendered.get("ok"):
+                    renderer.record_ff_success(url)
+                    logger.debug("httpx fast fetch: %s", url)
+                else:
+                    renderer.record_ff_failure(url)
+                    rendered = await renderer.render(url)
         except Exception as e:
             logger.exception("render failed: %s", url)
             return {"ok": False, "code": 2001, "reason": f"渲染失败：{e!r}", "stage": "render"}
@@ -675,26 +693,21 @@ async def _crawl_one_attempt(task_id: str, url: str, *, target_date: date, date_
             except Exception as e:
                 logger.debug("cache write failed: %r", e)
 
+        # 主路径：适配器用 filtered_html（去噪后），安全网用 raw_html
         page = RenderedPage(
             url=url,
             final_url=final_url,
-            html=raw_html,  # 适配器使用原始 HTML 提取（Readability 自带去噪）
+            html=filtered_html,
             title=title,
             extra=extra,
         )
-
-    # 静态信息页标题拦截（避免浪费 LLM 调用）
-    _STATIC_TITLE_KW = {
-        "学校沿革", "历史沿革", "沿革", "学校简介", "学校概况", "关于我们", "简介",
-        "机构设置", "部门设置", "组织架构", "领导介绍", "领导班子", "现任领导", "历任领导",
-        "校园风光", "校园地图", "招生就业", "招生信息", "师资队伍", "师资力量",
-        "学科建设", "专业设置", "校史", "校训", "校歌", "联系我们", "联系方式",
-        "信息公开", "规章制度", "校友会", "图书馆", "档案馆",
-        "党建工作", "安全保卫", "后勤服务", "合作交流", "国际交流",
-    }
-    if any((title or "") == kw or (title or "").endswith(kw) for kw in _STATIC_TITLE_KW):
-        logger.info("static page filtered by title: %s", url)
-        return {"ok": True, "filtered": True, "code": 2003, "reason": "static_page", "stage": "title_filter"}
+        raw_page = RenderedPage(
+            url=url,
+            final_url=final_url,
+            html=raw_html,
+            title=title,
+            extra=extra,
+        )
 
     draft = None
     last_reason = "ALL_ADAPTERS_FAILED"
@@ -714,30 +727,24 @@ async def _crawl_one_attempt(task_id: str, url: str, *, target_date: date, date_
                 break
 
         try:
-            d = await adapter.extract(page)
+            d = await adapter.extract(raw_page)  # 用原始 HTML（filtered_html 会破坏日期元素）
             if adapter.validate(d):
                 draft = d
                 break
             else:
                 last_reason = f"{adapter.name}: validate failed"
-                # Readability 验证失败：尝试 BM25 过滤后重试
+                # Readability 失败：安全网回滚 raw_html 重试
                 if adapter.name == "readability":
                     readability_failed = True
-                    if settings.CONTENT_FILTER_ENABLED:
-                        try:
-                            filtered_html = await asyncio.to_thread(_dual_filter_pipeline, page.html)
-                            if filtered_html and len(filtered_html) > 100:
-                                retry_page = RenderedPage(
-                                    url=page.url, final_url=page.final_url,
-                                    html=filtered_html, title=page.title, extra=page.extra,
-                                )
-                                d2 = await adapter.extract(retry_page)
-                                if adapter.validate(d2):
-                                    draft = d2
-                                    break
-                        except Exception as filter_err:
-                            logger.debug("BM25 fallback failed for %s: %r", url, filter_err)
-                    logger.debug("readability failed, trying LLM: %s reason=%s", url, last_reason)
+                    if d is not None:
+                        logger.debug("readability validate failed on filtered_html, fallback to raw_html: %s", url)
+                    else:
+                        logger.debug("readability extract=None on filtered_html, fallback to raw_html: %s", url)
+                    d2 = await adapter.extract(raw_page)
+                    if adapter.validate(d2):
+                        draft = d2
+                        break
+                    logger.debug("readability also failed on raw_html, trying LLM: %s", url)
         except Exception as e:
             logger.warning("adapter %s failed for %s: %r", adapter.name, url, e)
             last_reason = f"{adapter.name}: {e!r}"
@@ -751,21 +758,15 @@ async def _crawl_one_attempt(task_id: str, url: str, *, target_date: date, date_
     # 清洗新闻噪音（图片署名、标题块等）
     draft.raw_content = _clean_news_noise(draft.raw_content)
 
-    # 文章质量评分：过滤静态信息页（国歌、经济数据简表等非文章内容）
-    # 信号1: 正文过短 → 非文章内容
-    # 信号2: 无发布日期 → 静态信息页通常没有日期
-    _quality_score = 0
-    content_len = len(draft.raw_content or "")
-    if content_len < 500:
-        _quality_score -= 1
+    # 补充日期提取：从正文前 500 字中提取（当 meta/HTML 提取失败时）
     if not draft.publish_date:
-        _quality_score -= 1
-    if _quality_score <= -2:
-        logger.info("quality filter: skip %s (score=%d, len=%d, has_date=%s)",
-                    url, _quality_score, content_len, bool(draft.publish_date))
-        return {"ok": True, "filtered": True, "code": 2004, "reason": "low_quality", "stage": "quality_filter"}
+        extracted = _extract_date_from_text(draft.raw_content[:3000])
+        if extracted:
+            draft.publish_date = extracted
+            logger.debug("date from text: %s → %s", url, extracted)
 
     # 日期过滤：页面有明确日期且在时间段外时跳过
+    # date_to 未设置时默认与 target_date 一致（精确天级）
     date_to_val = date_to or target_date
     if draft.publish_date and not (target_date <= draft.publish_date <= date_to_val):
         logger.info("date filter: skip %s (publish=%s, range=%s~%s)", url, draft.publish_date, target_date, date_to_val)

@@ -6,10 +6,13 @@ from pydantic import BaseModel, Field, HttpUrl
 
 class DiscoveryScanRequest(BaseModel):
     entry_url: str = Field(..., min_length=1)
+    target_date: date | None = None
+    date_to: date | None = None
     max_depth: int = Field(default=2, ge=1, le=3)
-    max_links: int = Field(default=50, ge=1, le=200)
+    max_links: int = Field(default=50, ge=1, le=500)
     enable_pagination: bool = Field(default=True)
     max_pages: int = Field(default=5, ge=1, le=50)
+    enable_sitemap: bool = Field(default=True)
 
 
 class DiscoveryTaskCreate(BaseModel):
@@ -18,6 +21,7 @@ class DiscoveryTaskCreate(BaseModel):
     date_to: date | None = None
     task_name: str | None = None
     max_depth: int = Field(default=2, ge=1, le=3)
-    max_links: int = Field(default=50, ge=1, le=200)
+    max_links: int = Field(default=50, ge=1, le=500)
     enable_pagination: bool = Field(default=True)
     max_pages: int = Field(default=5, ge=1, le=50)
+    enable_sitemap: bool = Field(default=True)

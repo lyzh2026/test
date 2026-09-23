@@ -26,6 +26,9 @@ async def scan_links(
         max_links=payload.max_links,
         enable_pagination=payload.enable_pagination,
         max_pages=payload.max_pages,
+        target_date=payload.target_date,
+        date_to=payload.date_to,
+        enable_sitemap=payload.enable_sitemap,
     )
     return success(
         {
@@ -51,6 +54,9 @@ async def create_discovery_task(
         max_links=payload.max_links,
         enable_pagination=payload.enable_pagination,
         max_pages=payload.max_pages,
+        target_date=payload.target_date,
+        date_to=payload.date_to,
+        enable_sitemap=payload.enable_sitemap,
     )
     if not links:
         return error(
@@ -60,11 +66,12 @@ async def create_discovery_task(
             request=request,
         )
 
-    url_list = [item["url"] for item in links]
+    direct_urls = [item["url"] for item in links]
     try:
         task = await crawler_service.submit_task(
             session=session,
-            url_list=url_list,
+            url_list=[],
+            direct_urls=direct_urls,
             target_date=payload.target_date,
             date_to=payload.date_to,
             task_name=payload.task_name,

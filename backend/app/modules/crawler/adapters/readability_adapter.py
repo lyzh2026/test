@@ -8,6 +8,7 @@ from bs4 import BeautifulSoup
 from readability import Document
 
 from app.modules.crawler.adapters.base import ArticleDraft, RenderedPage, SpiderAdapter
+from app.modules.discovery.link_extractor import STATIC_PAGE_KEYWORDS
 
 logger = logging.getLogger(__name__)
 
@@ -79,13 +80,34 @@ def _guess_publish_date(html: str) -> Optional[date]:
                     return date(y, mo, d)
                 except ValueError:
                     continue
-    # 再全文找第一个合理日期
+    # 再全文找所有合理日期，取最新（避免正文中历史引用被误认为发布日期）
+    best_date: Optional[date] = None
     for p in patterns:
-        m = re.search(p, text)
-        if m:
+        for m in re.finditer(p, text):
             try:
                 y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
                 if 2000 <= y <= 2099 and 1 <= mo <= 12 and 1 <= d <= 31:
+                    candidate = date(y, mo, d)
+                    if best_date is None or candidate > best_date:
+                        best_date = candidate
+            except ValueError:
+                continue
+    return best_date
+    return None
+
+
+def _extract_date_from_text(text: str) -> Optional[date]:
+    """从正文前 3000 字中提取发布日期（作为 meta/HTML 提取的补充）。"""
+    patterns = [
+        r"(\d{4})年(\d{1,2})月(\d{1,2})日",
+        r"(\d{4})[/-](\d{1,2})[/-](\d{1,2})",
+    ]
+    for p in patterns:
+        m = re.search(p, text[:3000])
+        if m:
+            try:
+                y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                if 2020 <= y <= 2099 and 1 <= mo <= 12 and 1 <= d <= 31:
                     return date(y, mo, d)
             except ValueError:
                 continue
@@ -257,27 +279,6 @@ def _detect_language(text: str) -> str | None:
 class ReadabilityAdapter(SpiderAdapter):
     name = "readability"
 
-    # 静态信息页标题黑名单（命中即跳过，不做内容提取）
-    _STATIC_TITLE_KEYWORDS = {
-        "学校沿革", "历史沿革", "沿革", "学校简介", "学校概况", "关于我们", "简介",
-        "机构设置", "部门设置", "组织架构", "内设机构", "机构职能",
-        "领导介绍", "领导班子", "现任领导", "历任领导", "领导信箱",
-        "校园风光", "校园地图", "校园导览", "校区介绍",
-        "招生就业", "招生信息", "招生简章", "本科招生", "研究生招生",
-        "师资队伍", "师资力量", "名师风采", "教师风采", "杰出人才",
-        "学科建设", "专业设置", "重点学科", "学科简介",
-        "校史", "校训", "校歌", "校徽", "校庆",
-        "联系我们", "联系方式", "交通指南", "来校路线",
-        "信息公开", "信息公开指南", "信息公开目录",
-        "规章制度", "政策法规",
-        "校友会", "校友总会", "教育基金会",
-        "图书馆", "档案馆", "网络中心",
-        "校园文化", "学生工作", "学生社团",
-        "合作交流", "国际交流", "国际合作",
-        "党建工作", "思政工作", "纪检监察",
-        "安全保卫", "后勤服务", "物业服务",
-    }
-
     def validate(self, draft: ArticleDraft | None) -> bool:
         if not super().validate(draft):
             return False
@@ -295,6 +296,20 @@ class ReadabilityAdapter(SpiderAdapter):
                         detected, draft.original_title[:50])
             return False  # Reject, let LLM try
 
+        # 质量评分：正文过短且无发布日期 → 非文章内容
+        content_len = len(draft.raw_content or "")
+        quality_score = 0
+        if content_len < 300:
+            quality_score -= 2
+        elif content_len < 500:
+            quality_score -= 1
+        if not draft.publish_date:
+            quality_score -= 1
+        if quality_score <= -2:
+            logger.debug("quality filter: skip (score=%d, len=%d, has_date=%s)",
+                         quality_score, content_len, bool(draft.publish_date))
+            return False
+
         return True
 
     async def extract(self, page: RenderedPage) -> ArticleDraft | None:
@@ -302,7 +317,7 @@ class ReadabilityAdapter(SpiderAdapter):
             doc = Document(page.html)
             title = (doc.short_title() or page.title or "").strip()
             # 标题黑名单过滤：静态信息页直接跳过（后缀匹配，避免误杀新闻标题）
-            for kw in self._STATIC_TITLE_KEYWORDS:
+            for kw in STATIC_PAGE_KEYWORDS:
                 if title == kw or title.endswith(kw):
                     logger.debug("static page filtered by title keyword '%s': %s", kw, page.url)
                     return None

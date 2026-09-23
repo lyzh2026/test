@@ -17,6 +17,7 @@ import httpx
 import psutil
 from bs4 import BeautifulSoup
 from playwright.async_api import Browser, Page, Playwright, async_playwright
+from playwright._impl._errors import TargetClosedError
 
 from app.core.config import settings
 from app.modules.crawler.proxy_pool import proxy_pool
@@ -29,6 +30,10 @@ _httpx_client: httpx.AsyncClient | None = None
 
 # 判断页面是否需要 JS 渲染的最小标签数阈值
 _STATIC_MIN_TAGS = 10
+
+# 网络捕获上限
+_NETWORK_CAPTURE_MAX_RESPONSES = 20
+_NETWORK_CAPTURE_MAX_BODY = 1_048_576
 
 _USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -65,6 +70,10 @@ class DynamicRenderer:
         self._semaphore = asyncio.Semaphore(settings.RENDER_POOL_SIZE)
         self._page_count = 0  # 当前浏览器进程已处理的页面数
         self._shared_context = None  # 非隔离模式下的共享 context
+
+        # 域名指纹缓存：连续 fast_fetch 失败 N 次 → 标记 DYNAMIC
+        self._domain_ff_failures: dict[str, int] = {}
+        self._domain_render_mode: dict[str, str] = {}
 
     async def startup(self):
         global _httpx_client
@@ -123,6 +132,34 @@ class DynamicRenderer:
             return {"html": html, "title": title, "final_url": str(resp.url), "ok": True}
         except Exception:
             return None
+
+
+    async def record_ff_failure(self, url: str):
+        """记录一次 fast_fetch 失败。连续 3 次 → 标记域名为 DYNAMIC。"""
+        from urllib.parse import urlparse
+        domain = urlparse(url).hostname or ""
+        if not domain:
+            return
+        self._domain_ff_failures[domain] = self._domain_ff_failures.get(domain, 0) + 1
+        if self._domain_ff_failures[domain] >= 3:
+            self._domain_render_mode[domain] = "dynamic"
+            logger.info("domain fingerprint: %s → DYNAMIC (consecutive ff failures=%d)", domain, self._domain_ff_failures[domain])
+
+    def needs_playwright(self, url: str) -> bool:
+        """检查域名是否已标记为 DYNAMIC，跳过 fast_fetch 直接走 Playwright。"""
+        from urllib.parse import urlparse
+        domain = urlparse(url).hostname or ""
+        if self._domain_render_mode.get(domain) == "dynamic":
+            logger.debug("domain fingerprint: skip fast_fetch for %s (domain=%s, mode=dynamic)", url, domain)
+            return True
+        return False
+
+    def record_ff_success(self, url: str):
+        """标记 fast_fetch 成功，重置域名失败计数器。"""
+        from urllib.parse import urlparse
+        domain = urlparse(url).hostname or ""
+        if domain:
+            self._domain_ff_failures[domain] = 0
 
     async def shutdown(self):
         global _httpx_client
@@ -196,6 +233,7 @@ class DynamicRenderer:
         min_content_length: int = 500,
         scroll: bool = True,
         scroll_rounds_range: tuple[int, int] = (2, 3),
+        capture_network: bool = False,
     ) -> dict:
         async with self._semaphore:
             start_ts = time.monotonic()
@@ -205,99 +243,151 @@ class DynamicRenderer:
                     if not self._browser or not self._browser.is_connected():
                         await self._launch_browser()
 
-            proxy_str = await proxy_pool.get_proxy() if settings.PROXY_ENABLED else None
-            proxy_config = {"server": proxy_str} if proxy_str else None
-
-            # 上下文隔离：每个 URL 独立 context 或共享
-            if settings.RENDER_CONTEXT_ISOLATION:
-                _ua = _random_ua()
-                _vp = random_viewport()
-                context_kwargs = dict(
-                    user_agent=_ua,
-                    viewport=_vp,
-                    locale="zh-CN",
-                    proxy=proxy_config,
-                    timezone_id="Asia/Shanghai",
-                )
-                context = await self._browser.new_context(**context_kwargs)
-            else:
-                if self._shared_context is None:
-                    self._shared_context = await self._browser.new_context(
-                        user_agent=_random_ua(),
-                        viewport=random_viewport(),
-                        locale="zh-CN",
-                        timezone_id="Asia/Shanghai",
-                    )
-                context = self._shared_context
-            # 如果共享 context 已失效，重建
-            try:
-                page = await context.new_page()
-            except Exception:
-                self._shared_context = await self._browser.new_context(
-                    user_agent=_random_ua(),
-                    viewport=random_viewport(),
-                    locale="zh-CN",
-                    timezone_id="Asia/Shanghai",
-                )
-                context = self._shared_context
-                page = await context.new_page()
-
-            # Stealth：注入增强反检测脚本
-            response_headers: dict = {}
-            if settings.RENDER_STEALTH_ENABLED:
-                for script in build_stealth_scripts():
-                    await context.add_init_script(script)
-
-            try:
-                resp = await page.goto(url, wait_until="domcontentloaded", timeout=settings.RENDER_TIMEOUT_MS)
-                if scroll:
-                    # 随机滚动轮数
-                    scroll_rounds = random.randint(*scroll_rounds_range)
-                    await self._auto_scroll(page, scroll_rounds)
-                html = await page.content()
-                title = await page.title()
-                final_url = page.url
-                # 收集响应头用于拦截检测
-                if resp:
-                    try:
-                        response_headers = await resp.all_headers()
-                    except Exception:
-                        pass
-                # 拦截检测
-                status_code = resp.status if resp else 200
-                detection = detect_blocking(html, status_code=status_code, headers=response_headers)
-                if detection.blocked:
-                    logger.warning("anti-detection: %s blocked by %s (confidence=%.2f)", url, detection.block_type, detection.confidence)
-                    if proxy_str:
-                        await proxy_pool.report_fail(proxy_str)
-                    return {
-                        "html": html,
-                        "title": title,
-                        "final_url": final_url,
-                        "ok": False,
-                        "reason": f"BLOCKED:{detection.block_type}",
-                        "block_type": detection.block_type,
-                        "block_confidence": detection.confidence,
-                    }
-                elapsed = (time.monotonic() - start_ts) * 1000
-                if proxy_str:
-                    await proxy_pool.report_success(proxy_str, elapsed)
-                if len(html) < min_content_length:
-                    return {"html": html, "title": title, "final_url": final_url, "ok": False, "reason": "CONTENT_TOO_SHORT"}
-                self._page_count += 1
-                return {"html": html, "title": title, "final_url": final_url, "ok": True}
-            except Exception:
-                if proxy_str:
-                    await proxy_pool.report_fail(proxy_str)
-                raise
-            finally:
+            for _attempt in range(2):
+                context = None
+                page = None
                 try:
+                    proxy_str = await proxy_pool.get_proxy() if settings.PROXY_ENABLED else None
+                    proxy_config = {"server": proxy_str} if proxy_str else None
+
+                    # 上下文隔离：每个 URL 独立 context 或共享
                     if settings.RENDER_CONTEXT_ISOLATION:
-                        await context.close()
+                        _ua = _random_ua()
+                        _vp = random_viewport()
+                        context_kwargs = dict(
+                            user_agent=_ua,
+                            viewport=_vp,
+                            locale="zh-CN",
+                            proxy=proxy_config,
+                            timezone_id="Asia/Shanghai",
+                        )
+                        context = await self._browser.new_context(**context_kwargs)
                     else:
-                        await page.close()
-                except Exception:
-                    pass
+                        if self._shared_context is None:
+                            self._shared_context = await self._browser.new_context(
+                                user_agent=_random_ua(),
+                                viewport=random_viewport(),
+                                locale="zh-CN",
+                                timezone_id="Asia/Shanghai",
+                            )
+                        context = self._shared_context
+                    # 如果共享 context 已失效，重建
+                    try:
+                        page = await context.new_page()
+                    except Exception:
+                        self._shared_context = await self._browser.new_context(
+                            user_agent=_random_ua(),
+                            viewport=random_viewport(),
+                            locale="zh-CN",
+                            timezone_id="Asia/Shanghai",
+                        )
+                        context = self._shared_context
+                        page = await context.new_page()
+
+                    # Stealth：注入增强反检测脚本
+                    response_headers: dict = {}
+                    if settings.RENDER_STEALTH_ENABLED:
+                        for script in build_stealth_scripts():
+                            await context.add_init_script(script)
+
+                    # 网络响应捕获：注册监听器收集 JSON 响应
+                    network_responses: list[dict] = []
+                    if capture_network:
+                        async def _on_response(response):
+                            try:
+                                headers = await response.all_headers()
+                                ct = headers.get("content-type", "")
+                                if "application/json" not in ct:
+                                    return
+                                if len(network_responses) >= _NETWORK_CAPTURE_MAX_RESPONSES:
+                                    return
+                                body_bytes = await response.body()
+                                body_text = body_bytes.decode("utf-8", errors="replace")[:_NETWORK_CAPTURE_MAX_BODY]
+                                network_responses.append({
+                                    "url": response.url,
+                                    "status": response.status,
+                                    "content_type": ct,
+                                    "body": body_text,
+                                })
+                            except Exception:
+                                pass
+                        page.on("response", _on_response)
+
+                    try:
+                        resp = await page.goto(url, wait_until="domcontentloaded", timeout=settings.RENDER_TIMEOUT_MS)
+                        if scroll:
+                            # 随机滚动轮数
+                            scroll_rounds = random.randint(*scroll_rounds_range)
+                            await self._auto_scroll(page, scroll_rounds)
+                        html = await page.content()
+                        title = await page.title()
+                        final_url = page.url
+                        # 收集响应头用于拦截检测
+                        if resp:
+                            try:
+                                response_headers = await resp.all_headers()
+                            except Exception:
+                                pass
+                        # 拦截检测
+                        status_code = resp.status if resp else 200
+                        detection = detect_blocking(html, status_code=status_code, headers=response_headers)
+                        if detection.blocked:
+                            logger.warning("anti-detection: %s blocked by %s (confidence=%.2f)", url, detection.block_type, detection.confidence)
+                            if proxy_str:
+                                await proxy_pool.report_fail(proxy_str)
+                            result = {
+                                "html": html,
+                                "title": title,
+                                "final_url": final_url,
+                                "ok": False,
+                                "reason": f"BLOCKED:{detection.block_type}",
+                                "block_type": detection.block_type,
+                                "block_confidence": detection.confidence,
+                            }
+                            if capture_network:
+                                result["network_responses"] = network_responses
+                            return result
+                        elapsed = (time.monotonic() - start_ts) * 1000
+                        if proxy_str:
+                            await proxy_pool.report_success(proxy_str, elapsed)
+                        if len(html) < min_content_length:
+                            result = {"html": html, "title": title, "final_url": final_url, "ok": False, "reason": "CONTENT_TOO_SHORT"}
+                            if capture_network:
+                                result["network_responses"] = network_responses
+                            return result
+                        self._page_count += 1
+                        result = {"html": html, "title": title, "final_url": final_url, "ok": True}
+                        if capture_network:
+                            result["network_responses"] = network_responses
+                        return result
+                    except Exception:
+                        if proxy_str:
+                            await proxy_pool.report_fail(proxy_str)
+                        raise
+                    finally:
+                        try:
+                            if settings.RENDER_CONTEXT_ISOLATION:
+                                await context.close()
+                            else:
+                                await page.close()
+                        except Exception:
+                            pass
+                except TargetClosedError:
+                    if _attempt == 1:
+                        raise
+                    if page:
+                        try:
+                            await page.close()
+                        except Exception:
+                            pass
+                    if context:
+                        try:
+                            await context.close()
+                        except Exception:
+                            pass
+                    if not settings.RENDER_CONTEXT_ISOLATION:
+                        self._shared_context = None
+                    continue
 
     async def _auto_scroll(self, page: Page, rounds: int):
         for i in range(rounds):
@@ -307,6 +397,100 @@ class DynamicRenderer:
                 break
             # 随机间隔 0.5-2s
             await asyncio.sleep(0.5 + random.random() * 1.5)
+
+    async def click_paginate(
+        self, url: str, *, max_pages: int = 5
+    ) -> list[dict]:
+        """Playwright 点击翻页兜底。
+
+        在列表页中查找翻页按钮（.next / 下一页 / 等），逐页点击，
+        返回 [{html, final_url, ok}]，检测到按钮不存在或 disabled 时停止。
+        浏览器不可用时返回空列表。
+        """
+        if not self._browser or not self._browser.is_connected():
+            return []
+
+        async with self._semaphore:
+            for attempt in range(2):
+                context = None
+                page = None
+                try:
+                    context = await self._browser.new_context(
+                        user_agent=_random_ua(),
+                        viewport=random_viewport(),
+                        locale="zh-CN",
+                        timezone_id="Asia/Shanghai",
+                    )
+                    page = await context.new_page()
+
+                    if settings.RENDER_STEALTH_ENABLED:
+                        for script in build_stealth_scripts():
+                            await context.add_init_script(script)
+
+                    await page.goto(url, wait_until="domcontentloaded",
+                                    timeout=settings.RENDER_TIMEOUT_MS)
+                    await self._auto_scroll(page, random.randint(1, 2))
+
+                    results = []
+                    for i in range(max_pages):
+                        next_btn = await page.query_selector(
+                            'a.next, a.pagination-next, a.next-page, [rel="next"], '
+                            'a:has-text("下一页"), a:has-text("下一頁"), '
+                            'button:has-text("下一页"), button:has-text("下一頁"), '
+                            '[aria-label*="下一页"], [aria-label*="next page"], '
+                            'li.next a, li.pagination-next a'
+                        )
+                        if not next_btn:
+                            break
+
+                        disabled = await next_btn.get_attribute("disabled")
+                        aria_disabled = await next_btn.get_attribute("aria-disabled")
+                        cls = (await next_btn.get_attribute("class")) or ""
+                        if disabled is not None or aria_disabled == "true" or "disabled" in cls.split():
+                            break
+
+                        await next_btn.click()
+                        await page.wait_for_loadstate("networkidle")
+                        await self._auto_scroll(page, random.randint(1, 2))
+
+                        html = await page.content()
+                        final_url = page.url
+                        results.append({
+                            "html": html,
+                            "final_url": final_url,
+                            "ok": True,
+                        })
+                        self._page_count += 1
+
+                    if results:
+                        logger.info("click_paginate: %s → %d pages via click", url, len(results))
+                    return results
+
+                except TargetClosedError:
+                    if attempt == 1:
+                        break
+                    if page:
+                        try:
+                            await page.close()
+                        except Exception:
+                            pass
+                    if context:
+                        try:
+                            await context.close()
+                        except Exception:
+                            pass
+                    continue
+                except Exception as e:
+                    logger.debug("click_paginate failed: %s - %r", url, e)
+                    return []
+                finally:
+                    try:
+                        if context:
+                            await context.close()
+                    except Exception:
+                        pass
+
+        return []
 
 
 renderer = DynamicRenderer()

@@ -43,6 +43,20 @@ export function TaskProgress({
     statusRef.current = prog.status;
   }, [prog.status]);
 
+  // sync SSR props after router.refresh() — only when new status is terminal
+  // to avoid overwriting live WebSocket updates with stale SSR data
+  useEffect(() => {
+    if (TERMINAL_STATUSES.includes(initialStatus)) {
+      setProg((prev) => ({
+        ...prev,
+        completed: initialCompleted,
+        failed: initialFailed,
+        total: initialTotal,
+        status: initialStatus,
+      }));
+    }
+  }, [initialStatus, initialCompleted, initialFailed, initialTotal]);
+
   useEffect(() => {
     if (TERMINAL_STATUSES.includes(initialStatus)) return;
 
