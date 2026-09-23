@@ -173,7 +173,6 @@ class DynamicRenderer:
         domain = urlparse(url).hostname or ""
         if domain:
             self._domain_ff_failures[domain] = 0
-            self._domain_render_mode.pop(domain, None)
         self._bump(url, "ff_ok")
 
     def record_pw_result(self, url: str, ok: bool) -> None:
