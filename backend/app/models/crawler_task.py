@@ -22,6 +22,8 @@ class CrawlerTask(Base):
     completed_urls: Mapped[int] = mapped_column(Integer, default=0)
     failed_urls: Mapped[int] = mapped_column(Integer, default=0)
     failed_details: Mapped[list] = mapped_column(JSONB, default=list)
+    fallback_total: Mapped[int] = mapped_column(Integer, default=0)
+    fallback_done: Mapped[int] = mapped_column(Integer, default=0)
 
     status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
     callback_url: Mapped[str | None] = mapped_column(Text)

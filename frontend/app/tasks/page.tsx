@@ -14,6 +14,8 @@ type Task = {
   completed_urls: number;
   failed_urls: number;
   status: string;
+  fallback_total: number;
+  fallback_done: number;
   created_at: string;
 };
 
@@ -111,7 +113,7 @@ function OnceTasksTab() {
 
   // Poll when there are running/pending tasks
   useEffect(() => {
-    const hasActive = items.some(t => t.status === 'running' || t.status === 'pending');
+    const hasActive = items.some(t => t.status === 'running' || t.status === 'pending' || t.status === 'fallback_running');
     if (hasActive && !pollRef.current) {
       pollRef.current = setInterval(() => fetchTasks(offset, true), POLL_INTERVAL);
     } else if (!hasActive && pollRef.current) {

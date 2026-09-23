@@ -12,7 +12,8 @@ from sqlalchemy.orm import joinedload
 from app.models.ai_analysis import AIAnalysis
 from app.models.article import Article
 from app.modules.distribution.adapters.base import DistributionAdapter
-from app.modules.distribution.schemas import ArticleItem, CategoryGroup, ReportStats, WeeklyReport
+from app.modules.distribution.schemas import ArticleItem, CategoryGroup, HealthStats, ReportStats, WeeklyReport
+from app.modules.memory.service import build_health_stats, list_site_stats
 
 logger = logging.getLogger("shixun.distribution")
 
@@ -88,6 +89,9 @@ class WeeklyDigestService:
         if others:
             merged.append(CategoryGroup(name="其他", articles=others))
 
+        stat_rows = await list_site_stats(self.session, date_from=monday, date_to=sunday)
+        health_dict = build_health_stats(stat_rows)
+
         return WeeklyReport(
             year_week=year_week,
             date_range_start=monday,
@@ -97,6 +101,7 @@ class WeeklyDigestService:
                 total_articles=len(articles),
                 total_categories=len(merged),
             ),
+            health=HealthStats(**health_dict) if health_dict else None,
         )
 
 

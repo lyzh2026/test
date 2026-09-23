@@ -19,6 +19,8 @@ type Task = {
   failed_urls: number;
   failed_details: { url: string; code: number; reason: string; stage?: string }[];
   status: string;
+  fallback_total: number;
+  fallback_done: number;
   callback_url: string | null;
   started_at: string | null;
   completed_at: string | null;
@@ -28,6 +30,7 @@ type Task = {
 const STATUS_BADGE: Record<string, string> = {
   pending: 'badge-gray',
   running: 'badge-amber',
+  fallback_running: 'badge-amber',
   completed: 'badge-green',
   partial_failed: 'badge-amber',
   failed: 'badge-red',
@@ -37,6 +40,7 @@ const STATUS_BADGE: Record<string, string> = {
 const STATUS_LABEL: Record<string, string> = {
   pending: '等待中',
   running: '运行中',
+  fallback_running: '兜底中',
   completed: '已完成',
   partial_failed: '部分失败',
   failed: '失败',
@@ -88,6 +92,8 @@ export default async function TaskDetailPage({ params }: { params: { id: string 
           initialFailed={task.failed_urls}
           initialTotal={task.total_urls}
           initialStatus={task.status}
+          initialFallbackDone={task.fallback_done ?? 0}
+          initialFallbackTotal={task.fallback_total ?? 0}
         />
 
         <div className="mt-5 grid grid-cols-2 gap-4 text-xs md:grid-cols-4" style={{ color: '#9ca3af' }}>

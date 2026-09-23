@@ -1,11 +1,12 @@
 """测试 WebhookAdapter（飞书）。"""
+import json
 from datetime import date
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from app.modules.distribution.adapters.webhook_adapter import WebhookAdapter, _build_feishu_card
-from app.modules.distribution.schemas import ArticleItem, CategoryGroup, ReportStats, WeeklyReport
+from app.modules.distribution.schemas import ArticleItem, CategoryGroup, DegradedSite, HealthStats, ReportStats, WeeklyReport
 
 
 @pytest.fixture
@@ -71,3 +72,36 @@ class TestWebhookAdapterSend:
         adapter = WebhookAdapter()
         with pytest.raises(ValueError, match="Webhook URL 为空"):
             await adapter.send(sample_report, {"url": "", "platform": "feishu"})
+
+
+def _report_with_health():
+    return WeeklyReport(
+        year_week="2026-W18",
+        date_range_start=date(2026, 4, 27),
+        date_range_end=date(2026, 5, 3),
+        categories=[CategoryGroup(name="最新政策", articles=[])],
+        stats=ReportStats(total_articles=1, total_categories=1),
+        health=HealthStats(
+            total_attempts=5, fail_count=3, fail_rate=0.6,
+            degraded_sites=[DegradedSite(domain="slow.com", attempts=4, fail_count=3, fail_rate=0.75)],
+        ),
+    )
+
+
+def test_health_block_rendered():
+    card = _build_feishu_card(_report_with_health())
+    joined = json.dumps(card, ensure_ascii=False)
+    assert "系统健康度" in joined
+    assert "slow.com" in joined
+
+
+def test_no_health_block_when_none():
+    report = WeeklyReport(
+        year_week="2026-W18",
+        date_range_start=date(2026, 4, 27),
+        date_range_end=date(2026, 5, 3),
+        categories=[CategoryGroup(name="最新政策", articles=[])],
+        stats=ReportStats(total_articles=1, total_categories=1),
+    )
+    card = _build_feishu_card(report)
+    assert "系统健康度" not in json.dumps(card, ensure_ascii=False)

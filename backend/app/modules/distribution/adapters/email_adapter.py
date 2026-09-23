@@ -41,6 +41,7 @@ def _build_html(report: WeeklyReport) -> str:
 <div style="padding:16px 20px;background:#e8f0fe;font-size:13px;color:#555;">
   本周共采集 <strong>{report.stats.total_articles}</strong> 篇文章，覆盖 <strong>{report.stats.total_categories}</strong> 个分类
 </div>
+{_build_health_block(report)}
 <div style="padding:0 20px 20px;">
   <table style="width:100%;border-collapse:collapse;">
     {rows}
@@ -52,6 +53,36 @@ def _build_html(report: WeeklyReport) -> str:
 </div>
 </body>
 </html>"""
+
+
+def _build_health_block(report) -> str:
+    """系统健康度区块；health 为 None 时不渲染。"""
+    if not report.health:
+        return ""
+    h = report.health
+    rows = "".join(
+        f'<tr><td style="padding:4px 8px;border-bottom:1px solid #eee;">{s.domain}</td>'
+        f'<td style="padding:4px 8px;border-bottom:1px solid #eee;text-align:right;">{s.attempts}</td>'
+        f'<td style="padding:4px 8px;border-bottom:1px solid #eee;text-align:right;">{s.fail_count}</td>'
+        f'<td style="padding:4px 8px;border-bottom:1px solid #eee;text-align:right;">{s.fail_rate:.0%}</td></tr>'
+        for s in h.degraded_sites
+    )
+    table = (
+        '<table style="width:100%;border-collapse:collapse;font-size:12px;">'
+        '<tr><th style="text-align:left;padding:4px 8px;">站点</th>'
+        '<th style="text-align:right;padding:4px 8px;">尝试</th>'
+        '<th style="text-align:right;padding:4px 8px;">失败</th>'
+        '<th style="text-align:right;padding:4px 8px;">失败率</th></tr>'
+        f"{rows}</table>"
+    ) if h.degraded_sites else '<p style="font-size:12px;color:#777;">本周无降级记录</p>'
+
+    return (
+        '<div style="padding:16px 20px;font-size:13px;color:#555;">'
+        '<h3 style="margin:0 0 8px;font-size:14px;color:#333;">系统健康度</h3>'
+        f'<p style="margin:0 0 8px;">总请求 <strong>{h.total_attempts}</strong>，'
+        f'失败 <strong>{h.fail_count}</strong>，失败率 <strong>{h.fail_rate:.0%}</strong></p>'
+        f"{table}</div>"
+    )
 
 
 class EmailAdapter(DistributionAdapter):

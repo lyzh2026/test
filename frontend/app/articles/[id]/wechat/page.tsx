@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import WeChatPreview from '@/components/wechat/WeChatPreview';
+import DraftEditor from '@/components/wechat/DraftEditor';
 import { serverFetch, ServerApiError } from '@/lib/server-fetch';
 
 export const dynamic = 'force-dynamic';
@@ -38,12 +39,15 @@ export default async function WeChatPage({ params }: { params: { id: string } })
           </Link>
         </div>
       ) : data ? (
-        <WeChatPreview
-          articleId={params.id}
-          articleTitle={data.title}
-          initialHtml={data.html}
-          initialTemplate={data.template}
-        />
+        <div className="grid gap-6 lg:grid-cols-2">
+          <DraftEditor articleId={params.id} />
+          <WeChatPreview
+            articleId={params.id}
+            articleTitle={data.title}
+            initialHtml={data.html}
+            initialTemplate={data.template}
+          />
+        </div>
       ) : null}
     </main>
   );

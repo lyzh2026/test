@@ -71,6 +71,16 @@ async def lifespan(app: FastAPI):
 
     if not scheduler.running:
         scheduler.start()
+    # 恢复上次重启时中断的兜底队列（fallback_running 不在僵尸扫描范围内）
+    # 用一次性调度作业而非内联 await：drain 可能长达数分钟，不能阻塞应用就绪
+    from apscheduler.triggers.date import DateTrigger
+    from app.modules.crawler.service import resume_fallback_queues
+    scheduler.add_job(
+        resume_fallback_queues,
+        id="resume_fallback_queues",
+        trigger=DateTrigger(),
+        replace_existing=True,
+    )
     scheduler.add_job(
         scan_analyzing_timeouts,
         id="analyzing_timeout_scan",
@@ -82,6 +92,13 @@ async def lifespan(app: FastAPI):
         dispatch_weekly_report,
         id="weekly_digest",
         trigger=CronTrigger(day_of_week="mon", hour=8, minute=30),
+        replace_existing=True,
+    )
+    from app.modules.crawler.promotion import promote_render_policies
+    scheduler.add_job(
+        promote_render_policies,
+        id="promote_render_policies",
+        trigger=CronTrigger(hour=3, minute=17),
         replace_existing=True,
     )
     from app.modules.crawler.scheduled_service import restore_scheduled_crawls

@@ -28,6 +28,8 @@ def _serialize_task(task) -> dict:
         "completed_urls": task.completed_urls,
         "failed_urls": task.failed_urls,
         "failed_details": task.failed_details or [],
+        "fallback_total": task.fallback_total or 0,
+        "fallback_done": task.fallback_done or 0,
         "status": task.status,
         "callback_url": task.callback_url,
         "started_at": task.started_at.isoformat() if task.started_at else None,

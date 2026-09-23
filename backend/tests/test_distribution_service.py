@@ -28,6 +28,15 @@ class TestGenerateWeeklyReport:
     def mock_session(self):
         return AsyncMock()
 
+    def _wire_two_queries(self, mock_session, articles, stat_rows):
+        """第 1 次 execute → 文章；第 2 次 execute → 站点统计。"""
+        article_result = MagicMock()
+        article_result.unique.return_value.scalars.return_value.all.return_value = articles
+        stat_result = MagicMock()
+        stat_result.all.return_value = stat_rows
+        mock_session.execute = AsyncMock(side_effect=[article_result, stat_result])
+        return mock_session
+
     def _make_article(self, title: str, cat: str, day_offset: int = 0):
         article = MagicMock(spec=Article)
         article.original_title = title
@@ -48,9 +57,7 @@ class TestGenerateWeeklyReport:
             self._make_article("文章B", "人工智能", 1),
             self._make_article("文章C", "最新政策", 2),
         ]
-        mock_result = MagicMock()
-        mock_result.unique.return_value.scalars.return_value.all.return_value = articles
-        mock_session.execute = AsyncMock(return_value=mock_result)
+        self._wire_two_queries(mock_session, articles, [])
 
         svc = WeeklyDigestService(mock_session)
         report = await svc.generate_weekly_report("2026-W18")
@@ -90,3 +97,31 @@ class TestGenerateWeeklyReport:
 
         assert report.stats.total_articles == 1
         assert report.categories[0].articles[0].summary == ""
+
+    @pytest.mark.asyncio
+    async def test_health_none_when_no_stats(self, mock_session):
+        """区间内无统计 → health 为 None，不造假数据。"""
+        articles = [self._make_article("文章A", "最新政策")]
+        self._wire_two_queries(mock_session, articles, [])
+        svc = WeeklyDigestService(mock_session)
+        report = await svc.generate_weekly_report("2026-W18")
+        assert report.health is None
+
+    @pytest.mark.asyncio
+    async def test_health_populated_from_stats(self, mock_session):
+        articles = [self._make_article("文章A", "最新政策")]
+        stat = MagicMock()
+        stat.domain = "slow.com"
+        stat.ff_ok = 1
+        stat.ff_fail = 3
+        stat.pw_ok = 1
+        stat.pw_fail = 0
+        stat.ab_ok = 0
+        stat.ab_fail = 0
+        self._wire_two_queries(mock_session, articles, [stat])
+        svc = WeeklyDigestService(mock_session)
+        report = await svc.generate_weekly_report("2026-W18")
+        assert report.health is not None
+        assert report.health.fail_count == 3
+        assert report.health.total_attempts == 5
+        assert report.health.degraded_sites[0].domain == "slow.com"

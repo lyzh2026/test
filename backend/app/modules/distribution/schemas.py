@@ -24,12 +24,27 @@ class ReportStats(BaseModel):
     total_categories: int
 
 
+class DegradedSite(BaseModel):
+    domain: str
+    attempts: int
+    fail_count: int
+    fail_rate: float
+
+
+class HealthStats(BaseModel):
+    total_attempts: int
+    fail_count: int
+    fail_rate: float
+    degraded_sites: list[DegradedSite]
+
+
 class WeeklyReport(BaseModel):
     year_week: str
     date_range_start: date
     date_range_end: date
     categories: list[CategoryGroup]
     stats: ReportStats
+    health: HealthStats | None = None  # 新增；无数据时为 None
 
 
 # --- API Schemas ---

@@ -6,7 +6,7 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from app.core.database import Base
-from app.models import article, ai_analysis, crawler_task, allowed_domain, distribution  # noqa: F401  确保模型注册到 metadata
+from app.models import article, ai_analysis, crawler_task, allowed_domain, distribution, memory, routing  # noqa: F401  确保模型注册到 metadata
 
 config = context.config
 

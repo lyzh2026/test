@@ -16,12 +16,15 @@ type Task = {
   completed_urls: number;
   failed_urls: number;
   status: string;
+  fallback_total: number;
+  fallback_done: number;
   created_at: string;
 };
 
 const STATUS_BADGE: Record<string, string> = {
   pending: 'badge-gray',
   running: 'badge-amber',
+  fallback_running: 'badge-amber',
   completed: 'badge-green',
   partial_failed: 'badge-amber',
   failed: 'badge-red',
@@ -31,6 +34,7 @@ const STATUS_BADGE: Record<string, string> = {
 const STATUS_LABEL: Record<string, string> = {
   pending: '等待中',
   running: '运行中',
+  fallback_running: '兜底中',
   completed: '已完成',
   partial_failed: '部分失败',
   failed: '失败',
@@ -172,7 +176,7 @@ export function TaskTable({ items, onRefresh }: { items: Task[]; onRefresh?: () 
               <td className="px-4 py-3 text-xs" style={{ color: '#9ca3af' }}>{formatDate(t.created_at)}</td>
               <td className="px-4 py-3">
                 <div className="flex items-center gap-3">
-                  {(t.status === 'running' || t.status === 'pending') && (
+                  {(t.status === 'running' || t.status === 'pending' || t.status === 'fallback_running') && (
                     <Link
                       href={`/tasks/${t.id}`}
                       className="text-xs transition-colors"

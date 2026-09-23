@@ -16,6 +16,9 @@ class ProgressEvent:
     total: int = 0
     current_url: str | None = None
     message: str | None = None
+    tier: str | None = None          # cache | httpx | playwright | aibrowser
+    fallback_done: int = 0
+    fallback_total: int = 0
 
 
 class TaskProgressBus:

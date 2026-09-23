@@ -16,6 +16,8 @@ from app.dependencies.auth import current_admin
 from app.models.ai_analysis import AIAnalysis
 from app.models.article import Article
 from app.models.system_config import SystemConfig
+from app.modules.memory.service import build_edit_record
+from app.schemas.auth import CurrentUser
 from app.utils.response import error, success
 
 logger = logging.getLogger("shixun.articles")
@@ -424,7 +426,7 @@ async def update_article_categories(
     article_id: str,
     payload: dict,
     request: Request,
-    _: object = Depends(current_admin),
+    user: CurrentUser = Depends(current_admin),
     session: AsyncSession = Depends(get_session),
 ):
     """修改 AI 分类结果（最多 3 个标签）。"""
@@ -451,6 +453,7 @@ async def update_article_categories(
 
     existing = await session.execute(select(AIAnalysis).where(AIAnalysis.article_id == article_id))
     analysis = existing.scalar_one_or_none()
+    old_categories = list(analysis.categories or []) if analysis else []
     if analysis:
         analysis.categories = categories
     else:
@@ -461,6 +464,16 @@ async def update_article_categories(
     if article.status in ("failed_retryable", "failed_permanent"):
         article.status = "processed"
         article.failed_reason = None
+
+    if old_categories != categories:
+        session.add(build_edit_record(
+            target_type="category",
+            target_id=article.id,
+            field="categories",
+            old_value=old_categories,
+            new_value=categories,
+            editor=user.username,
+        ))
 
     await session.commit()
     return success({"categories": categories}, request=request)

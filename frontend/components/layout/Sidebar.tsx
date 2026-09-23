@@ -12,6 +12,7 @@ const NAV_MAIN = [
 ];
 
 const NAV_SECONDARY = [
+  { href: '/admin/memory', label: '记忆', icon: '◍' },
   { href: '/admin/settings', label: '设置', icon: '⚙' },
 ];
 
