@@ -7,7 +7,7 @@ import re
 from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urlparse, urlunparse
 
-from sqlalchemy import select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -78,6 +78,7 @@ def _is_retryable(result: dict) -> bool:
 
 
 FALLBACK_FAIL_REASON = "AI Browser 未取回可用正文"
+FALLBACK_INTERRUPTED_REASON = "兜底未执行：上次运行中断"
 
 
 def classify_result(res) -> str:
@@ -548,6 +549,11 @@ async def run_crawl_job(task_id: str, urls: list[str]):
             # 落库待兜底队列（与任务状态同一次 commit 之后，失败不影响任务终态）
             if t.status == "fallback_running":
                 try:
+                    # 重试会复用同一个任务行，先清掉上一轮的队列行：队列必须只描述当前这一轮，
+                    # 否则 `_settle_after_fallback` 会把上一轮的 failed 行二次计入 failed_details
+                    await session.execute(
+                        delete(FallbackQueue).where(FallbackQueue.task_id == task_id)
+                    )
                     for item in fallback_pending:
                         session.add(FallbackQueue(
                             task_id=task_id, url=item["url"],
@@ -559,8 +565,13 @@ async def run_crawl_job(task_id: str, urls: list[str]):
 
         # === 兜底：常规结果已可见，这里追加 AI Browser 结果 ===
         if final_status == "fallback_running" and fallback_pending and aibrowser_enabled:
-            _emit_fallback_progress(task_id, 0, len(fallback_pending))
-            ab_ok, ab_fail = await _drain_fallback_queue(task_id, target_date=task.target_date)
+            _emit_fallback_progress(
+                task_id, done=0, total=total, completed=completed, failed=failed,
+            )
+            ab_ok, ab_fail = await _drain_fallback_queue(
+                task_id, target_date=task.target_date,
+                completed=completed, failed=failed, total=total,
+            )
             # 这两行不能省：finally 里那条终态进度事件（service.py:523-528）直接引用
             # completed / failed 两个局部变量，不累加就会向前端播报兜底前的旧计数
             completed += ab_ok
@@ -1052,12 +1063,20 @@ async def _claim_fallback_batch(task_id: str) -> list[tuple[str, str]]:
 
 
 async def _mark_fallback_progress(
-    task_id: str, *, done: int, failed_ids: list[tuple[str, str]]
+    task_id: str, *, done: int, ok_ids: list[str], failed_ids: list[tuple[str, str]]
 ) -> None:
-    """把失败条目落到 state='failed'，并把 fallback_done 推进到 done。"""
+    """把执行结果落到行状态（成功 ok / 失败 failed），并把 fallback_done 推进到 done。
+
+    成功也必须落状态：只有把 done 留在「认领了但没执行」这一种含义上，恢复时才能
+    分辨哪些行是中断残留（见 `resume_fallback_queues`）。
+    """
     from app.models.routing import FallbackQueue
 
     async with AsyncSessionLocal() as session:
+        for row_id in ok_ids:
+            row = await session.get(FallbackQueue, row_id)
+            if row:
+                row.state = "ok"
         for row_id, reason in failed_ids:
             row = await session.get(FallbackQueue, row_id)
             if row:
@@ -1069,28 +1088,38 @@ async def _mark_fallback_progress(
         await session.commit()
 
 
-def _emit_fallback_progress(task_id: str, done: int, total: int) -> None:
+def _emit_fallback_progress(
+    task_id: str, *, done: int, total: int, completed: int, failed: int
+) -> None:
+    """兜底进度事件：`completed`/`failed`/`total` 是任务级计数，`done` 是兜底已处理条数。
+
+    三个任务级计数**必填且无默认值**：补 0 就会把前端面板打回「进度 0 / 0」。
+    """
     progress_bus.emit(ProgressEvent(
         task_id=task_id, status="fallback_running",
+        completed=completed, failed=failed, total=total,
         tier="aibrowser", fallback_done=done, fallback_total=total,
         message=f"兜底中 {done}/{total}",
     ))
 
 
-async def _drain_fallback_queue(task_id: str, *, target_date: date) -> tuple[int, int]:
+async def _drain_fallback_queue(
+    task_id: str, *, target_date: date, completed: int, failed: int, total: int
+) -> tuple[int, int]:
     """消费该任务已认领的兜底条目。返回 (入库成功数, 未入库数)。
 
     并发固定 1（spec §6.3）：AI Browser 慢且贵。任务内逐条串行，任务之间由
     `_ai_browser_sem` 全局串行，避免 N 个任务并发跑出 N 个 browser_use.Agent。
+    `completed`/`failed`/`total` 是任务级计数，只用于把进度事件填成真值。
     """
     claimed = await _claim_fallback_batch(task_id)
     if not claimed:
         return 0, 0
 
     cfg = await ai_browser.load_ai_browser_config()
-    total = len(claimed)
     ok_count = 0
     fail_count = 0
+    ok_ids: list[str] = []
     failed_ids: list[tuple[str, str]] = []
 
     for idx, (row_id, url) in enumerate(claimed, start=1):
@@ -1116,16 +1145,21 @@ async def _drain_fallback_queue(task_id: str, *, target_date: date) -> tuple[int
         renderer.record_ab_result(url, fallback_mark_ok(article_id))
         if fallback_mark_ok(article_id):
             ok_count += 1
+            ok_ids.append(row_id)
         else:
             fail_count += 1
             failed_ids.append((row_id, FALLBACK_FAIL_REASON))
 
         # 进度记账是尽力而为的旁路：写失败不能把整条 drain 打断
         try:
-            await _mark_fallback_progress(task_id, done=idx, failed_ids=failed_ids)
+            await _mark_fallback_progress(
+                task_id, done=idx, ok_ids=ok_ids, failed_ids=failed_ids,
+            )
         except Exception:
             logger.exception("fallback progress update failed: task=%s", task_id)
-        _emit_fallback_progress(task_id, idx, total)
+        _emit_fallback_progress(
+            task_id, done=idx, total=total, completed=completed, failed=failed,
+        )
 
     return ok_count, fail_count
 
@@ -1138,8 +1172,11 @@ async def resume_fallback_queues() -> int:
     窗口是**整个 drain 过程**（browse_with_ai 少则几十秒），那时队列里早就没有 pending
     行了。三个窗口一并覆盖：
     1. 入队 commit 后、认领 commit 前崩溃 → pending 行还在，正常消费；
-    2. drain 途中崩溃 → 行已全部 done，`_drain_fallback_queue` 返回 (0,0) 后直接结算；
+    2. drain 途中崩溃 → 残留的 done 行从未执行，改判失败后由 drain 返回 (0,0) 收尾；
     3. 入队 commit 本身失败 → 一行都没有，同样返回 (0,0) 后直接结算。
+
+    两种残留行必须分别平账：`done` = 认领了但没跑（按中断记为失败），`ok` = 崩溃前已入库
+    （补进 drain 的成功数）。否则这些 URL 既不在 completed_urls 也不在 failed_details 里。
 
     先认领再执行（spec §11）保证不会重复消费；启动时没有存活的 run_crawl_job，也不存在
     竞态。注意 scan_stale_running_tasks 只扫 running/pending，不会把 fallback_running
@@ -1156,8 +1193,26 @@ async def resume_fallback_queues() -> int:
             async with AsyncSessionLocal() as session:
                 t = await session.get(CrawlerTask, tid)
                 target_date = t.target_date if t else date.today()
-            ok, _ = await _drain_fallback_queue(tid, target_date=target_date)
-            await _settle_after_fallback(tid, ok=ok)
+                completed = t.completed_urls if t else 0
+                failed = t.failed_urls if t else 0
+                total = t.total_urls if t else 0
+                await session.execute(
+                    update(FallbackQueue)
+                    .where(FallbackQueue.task_id == tid, FallbackQueue.state == "done")
+                    .values(state="failed", fail_reason=FALLBACK_INTERRUPTED_REASON)
+                )
+                # 在 drain 之前数：drain 成功后会把行也置 ok，之后再数就会重复计入
+                ok_res = await session.execute(
+                    select(func.count()).select_from(FallbackQueue).where(
+                        FallbackQueue.task_id == tid, FallbackQueue.state == "ok"
+                    )
+                )
+                resumed_ok = int(ok_res.scalar_one() or 0)
+                await session.commit()
+            ok, _ = await _drain_fallback_queue(
+                tid, target_date=target_date, completed=completed, failed=failed, total=total,
+            )
+            await _settle_after_fallback(tid, ok=resumed_ok + ok)
         except Exception:
             logger.exception("resume fallback queue failed: task=%s", tid)
     if task_ids:

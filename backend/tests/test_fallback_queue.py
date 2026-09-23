@@ -91,15 +91,18 @@ async def test_drain_counts_success_and_failure():
                AsyncMock(return_value={"api_key": "k", "base_url": "b", "model": "m"})), \
          patch("app.modules.crawler.service.renderer") as fake_renderer:
         fake_renderer.record_ab_result = rec_ab
-        ok, fail = await service._drain_fallback_queue("t1", target_date=date(2026, 9, 23))
+        ok, fail = await service._drain_fallback_queue(
+            "t1", target_date=date(2026, 9, 23), completed=0, failed=0, total=2,
+        )
 
     assert (ok, fail) == (1, 1)
     assert rec_ab.call_count == 2
     assert rec_ab.call_args_list[0].args == ("https://a.com/1", True)
     assert rec_ab.call_args_list[1].args == ("https://b.com/2", False)
-    # 失败项被登记，成功项不登记
+    # 失败项被登记，成功项也不留 done（Fix 3：成功提升为 ok，失败提升为 failed）
     assert mark.await_count == 2
     assert mark.await_args_list[1].kwargs["failed_ids"] == [("row-2", service.FALLBACK_FAIL_REASON)]
+    assert mark.await_args_list[1].kwargs["ok_ids"] == ["row-1"]
 
 
 @pytest.mark.asyncio
@@ -116,7 +119,9 @@ async def test_drain_stops_on_cancel():
                    AsyncMock(return_value={"api_key": "k", "base_url": "b", "model": "m"})), \
              patch("app.modules.crawler.service.renderer") as fake_renderer:
             fake_renderer.record_ab_result = MagicMock()
-            ok, fail = await service._drain_fallback_queue("t-cancel", target_date=date(2026, 9, 23))
+            ok, fail = await service._drain_fallback_queue(
+                "t-cancel", target_date=date(2026, 9, 23), completed=0, failed=0, total=2,
+            )
     finally:
         service._cancelled_tasks.discard("t-cancel")
 
@@ -127,7 +132,9 @@ async def test_drain_stops_on_cancel():
 @pytest.mark.asyncio
 async def test_drain_empty_queue_returns_zeros():
     with patch.object(service, "_claim_fallback_batch", AsyncMock(return_value=[])):
-        assert await service._drain_fallback_queue("t1", target_date=date(2026, 9, 23)) == (0, 0)
+        assert await service._drain_fallback_queue(
+            "t1", target_date=date(2026, 9, 23), completed=0, failed=0, total=0,
+        ) == (0, 0)
 
 
 @pytest.mark.asyncio
@@ -208,6 +215,7 @@ def _fake_session(task: MagicMock) -> MagicMock:
     session.get = AsyncMock(return_value=task)
     session.commit = AsyncMock()
     session.add = MagicMock()
+    session.execute = AsyncMock()
     return session
 
 
@@ -312,13 +320,19 @@ async def test_resume_scans_by_status_not_by_pending_rows():
     """
     task = MagicMock()
     task.target_date = date(2026, 9, 23)
+    task.completed_urls = 5
+    task.failed_urls = 2
+    task.total_urls = 10
 
-    result = MagicMock()
-    result.scalars.return_value.all.return_value = ["t1"]
+    scan = MagicMock()
+    scan.scalars.return_value.all.return_value = ["t1"]
+    count = MagicMock()
+    count.scalar_one.return_value = 0
 
     session = MagicMock()
-    session.execute = AsyncMock(return_value=result)
+    session.execute = AsyncMock(side_effect=[scan, MagicMock(), count])
     session.get = AsyncMock(return_value=task)
+    session.commit = AsyncMock()
 
     drain = AsyncMock(return_value=(1, 0))
     settle = AsyncMock(return_value="completed")
@@ -329,7 +343,9 @@ async def test_resume_scans_by_status_not_by_pending_rows():
         n = await service.resume_fallback_queues()
 
     assert n == 1
-    drain.assert_awaited_once_with("t1", target_date=date(2026, 9, 23))
+    drain.assert_awaited_once_with(
+        "t1", target_date=date(2026, 9, 23), completed=5, failed=2, total=10,
+    )
     settle.assert_awaited_once_with("t1", ok=1)
 
     # 断言扫的是 CrawlerTask.status，而不是 FallbackQueue.state='pending'
@@ -337,3 +353,169 @@ async def test_resume_scans_by_status_not_by_pending_rows():
     sql = str(stmt)
     assert "crawler_tasks" in sql
     assert "fallback_queue" not in sql
+
+
+# ====== 最终修复轮：三条缺陷各自的回归 ======
+
+
+@pytest.mark.asyncio
+async def test_drain_emit_carries_task_counters():
+    """Fix 1 回归：兜底进度事件必须带任务真实的 completed / failed / total。
+
+    只填 task_id / status / 兜底两字段时，`ProgressEvent` 的 completed / failed / total
+    全是默认 0，而 `asdict()` 每个字段都序列化 → 前端 `data.total ?? prev.total` 里 0
+    不是 nullish，整个 drain 期间面板被打回「进度 0 / 0」「0%」。
+    """
+    claimed = [("row-1", "https://a.com/1")]
+    browse = AsyncMock(return_value={"ok": True, "title": "T", "content": "x" * 200})
+
+    with patch.object(service, "_claim_fallback_batch", AsyncMock(return_value=claimed)), \
+         patch.object(service, "_mark_fallback_progress", AsyncMock()), \
+         patch.object(service, "_store_ai_browsed_article", AsyncMock(return_value="a1")), \
+         patch("app.modules.crawler.ai_browser.browse_with_ai", browse), \
+         patch("app.modules.crawler.ai_browser.load_ai_browser_config",
+               AsyncMock(return_value={"api_key": "k", "base_url": "b", "model": "m"})), \
+         patch("app.modules.crawler.service.renderer") as fake_renderer, \
+         patch.object(service, "progress_bus") as bus:
+        fake_renderer.record_ab_result = MagicMock()
+        await service._drain_fallback_queue(
+            "t1", target_date=date(2026, 9, 23), completed=47, failed=2, total=50,
+        )
+
+    assert bus.emit.call_count == 1
+    ev = bus.emit.call_args.args[0]  # 断言真正播出的 ProgressEvent，而不是函数入参
+    assert (ev.completed, ev.failed, ev.total) == (47, 2, 50)
+    assert ev.status == "fallback_running"
+    assert ev.fallback_done == 1
+
+
+@pytest.mark.asyncio
+async def test_enqueue_purges_previous_run_rows():
+    """Fix 2 回归：任务行被重试复用时，入队前必须清掉上一轮的队列行。
+
+    不清的话，`_settle_after_fallback` 会把上一轮遗留的 state='failed' 行再追加一次——
+    同一个 URL 在 failed_details 里出现两次、failed_urls 虚高，或者报出一个本轮其实
+    已经成功入库的 URL。
+    """
+    stack, env = _patch_crawl_job(
+        aibrowser_enabled=True,
+        crawl_result={"ok": False, "fallback": True, "reason": "RENDER_FAILED", "stage": "render"},
+    )
+    session = env["session"]
+    with stack, patch.object(service, "_drain_fallback_queue", AsyncMock(return_value=(0, 0))), \
+         patch.object(service, "_settle_after_fallback", AsyncMock(return_value="failed")):
+        await service.run_crawl_job("t1", ["https://a.com/1"])
+
+    calls = session.mock_calls
+    deletes = [
+        i for i, c in enumerate(calls)
+        if c[0] == "execute" and str(c.args[0]).startswith("DELETE FROM fallback_queue")
+    ]
+    adds = [i for i, c in enumerate(calls) if c[0] == "add"]
+    assert len(deletes) == 1, [str(c.args[0]) for c in calls if c[0] == "execute"]
+    assert adds, "新一轮 pending 行没有写入"
+    assert deletes[0] < adds[0], "清理必须发生在写入新一轮 pending 行之前"
+
+
+@pytest.mark.asyncio
+async def test_mark_fallback_progress_promotes_ok_rows():
+    """Fix 3(a) 回归：成功的行要从 done 提升为 ok。
+
+    否则 done 同时表示「执行成功」和「认领后从未执行」，恢复时无法区分两者。
+    """
+    ok_row = MagicMock()
+    ok_row.state = "done"
+    fail_row = MagicMock()
+    fail_row.state = "done"
+    task = MagicMock()
+    task.fallback_done = 0
+
+    session = MagicMock()
+    session.get = AsyncMock(side_effect=[ok_row, fail_row, task])
+    session.commit = AsyncMock()
+
+    with patch.object(service, "AsyncSessionLocal", _session_cm(session)):
+        await service._mark_fallback_progress(
+            "t1", done=2, ok_ids=["row-1"], failed_ids=[("row-2", "boom")],
+        )
+
+    assert ok_row.state == "ok"
+    assert fail_row.state == "failed"
+    assert fail_row.fail_reason == "boom"
+    assert task.fallback_done == 2
+    assert session.commit.await_count == 1
+
+
+def _resume_session(*, ok_rows: int, task: MagicMock) -> MagicMock:
+    """resume 用的假 session：第 1 次 execute 是扫任务，第 2 次是清理，第 3 次是数 ok 行。"""
+    scan = MagicMock()
+    scan.scalars.return_value.all.return_value = ["t1"]
+    count = MagicMock()
+    count.scalar_one.return_value = ok_rows
+
+    session = MagicMock()
+    session.execute = AsyncMock(side_effect=[scan, MagicMock(), count])
+    session.get = AsyncMock(return_value=task)
+    session.commit = AsyncMock()
+    return session
+
+
+@pytest.mark.asyncio
+async def test_resume_marks_interrupted_done_rows_failed():
+    """Fix 3(b) 回归：恢复时把残留的 state='done' 行改成失败。
+
+    认领是一次性把所有 pending 置 done 再逐条执行，崩溃窗口是整个 drain；不清理的话
+    这些「认领了但没执行」的 URL 既不在 completed 也不在 failed_details 里，凭空消失。
+    """
+    task = MagicMock()
+    task.target_date = date(2026, 9, 23)
+    task.completed_urls = 4
+    task.failed_urls = 1
+    task.total_urls = 7
+    session = _resume_session(ok_rows=0, task=task)
+
+    drain = AsyncMock(return_value=(0, 0))
+    settle = AsyncMock(return_value="partial_failed")
+
+    with patch.object(service, "AsyncSessionLocal", _session_cm(session)), \
+         patch.object(service, "_drain_fallback_queue", drain), \
+         patch.object(service, "_settle_after_fallback", settle):
+        await service.resume_fallback_queues()
+
+    stmts = [c.args[0] for c in session.execute.call_args_list]
+    upd = [s for s in stmts if str(s).startswith("UPDATE fallback_queue")]
+    assert len(upd) == 1, [str(s) for s in stmts]
+    assert "fallback_queue.state = :state_1" in str(upd[0])
+    params = upd[0].compile().params
+    assert "failed" in params.values()
+    assert service.FALLBACK_INTERRUPTED_REASON in params.values()
+    settle.assert_awaited_once_with("t1", ok=0)
+
+
+@pytest.mark.asyncio
+async def test_resume_credits_existing_ok_rows():
+    """Fix 3(c) 回归：崩溃前已成功入库的 state='ok' 行要在恢复时补进 completed_urls。
+
+    drain 的返回值只数得出本次执行的那几条；上一轮已落库的 ok 行无人认领就会丢失，
+    于是 completed_urls + failed_urls < total_urls，账永远不平。
+    """
+    task = MagicMock()
+    task.target_date = date(2026, 9, 23)
+    task.completed_urls = 4
+    task.failed_urls = 1
+    task.total_urls = 7
+    session = _resume_session(ok_rows=2, task=task)
+
+    drain = AsyncMock(return_value=(1, 0))
+    settle = AsyncMock(return_value="completed")
+
+    with patch.object(service, "AsyncSessionLocal", _session_cm(session)), \
+         patch.object(service, "_drain_fallback_queue", drain), \
+         patch.object(service, "_settle_after_fallback", settle):
+        await service.resume_fallback_queues()
+
+    drain.assert_awaited_once_with(
+        "t1", target_date=date(2026, 9, 23), completed=4, failed=1, total=7,
+    )
+    # 崩溃前已成功的 2 条 + 本次 drain 成功的 1 条
+    settle.assert_awaited_once_with("t1", ok=3)
