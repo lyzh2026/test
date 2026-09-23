@@ -487,6 +487,9 @@ async def run_crawl_job(task_id: str, urls: list[str]):
             final_status = t.status
             await session.commit()
 
+        # 渲染统计落库（失败不影响主流程）
+        await renderer.flush_render_stats()
+
     except Exception as e:
         logger.exception("crawl job fatal error: task=%s", task_id)
         fatal_error = str(e)[:500]
@@ -643,14 +646,16 @@ async def _crawl_one_attempt(task_id: str, url: str, *, target_date: date, date_
         try:
             if renderer.needs_playwright(url):
                 rendered = await renderer.render(url)
+                renderer.record_pw_result(url, bool(rendered.get("ok")))
             else:
                 rendered = await renderer.fast_fetch(url)
                 if rendered and rendered.get("ok"):
                     renderer.record_ff_success(url)
                     logger.debug("httpx fast fetch: %s", url)
                 else:
-                    renderer.record_ff_failure(url)
+                    await renderer.record_ff_failure(url)
                     rendered = await renderer.render(url)
+                    renderer.record_pw_result(url, bool(rendered.get("ok")))
         except Exception as e:
             logger.exception("render failed: %s", url)
             return {"ok": False, "code": 2001, "reason": f"渲染失败：{e!r}", "stage": "render"}

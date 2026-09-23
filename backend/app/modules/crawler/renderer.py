@@ -12,6 +12,7 @@ import logging
 import os
 import random
 import time
+from datetime import date
 
 import httpx
 import psutil
@@ -75,6 +76,9 @@ class DynamicRenderer:
         self._domain_ff_failures: dict[str, int] = {}
         self._domain_render_mode: dict[str, str] = {}
 
+        # 渲染统计缓冲：按 (domain, 当天) 累加，任务结束时一次性 flush
+        self._stat_deltas: dict[tuple[str, date], dict[str, int]] = {}
+
     async def startup(self):
         global _httpx_client
         if _httpx_client is None:
@@ -134,6 +138,14 @@ class DynamicRenderer:
             return None
 
 
+    def _bump(self, url: str, counter: str) -> None:
+        from urllib.parse import urlparse
+        domain = urlparse(url).hostname or ""
+        if not domain:
+            return
+        counters = self._stat_deltas.setdefault((domain, date.today()), {})
+        counters[counter] = counters.get(counter, 0) + 1
+
     async def record_ff_failure(self, url: str):
         """记录一次 fast_fetch 失败。连续 3 次 → 标记域名为 DYNAMIC。"""
         from urllib.parse import urlparse
@@ -144,6 +156,7 @@ class DynamicRenderer:
         if self._domain_ff_failures[domain] >= 3:
             self._domain_render_mode[domain] = "dynamic"
             logger.info("domain fingerprint: %s → DYNAMIC (consecutive ff failures=%d)", domain, self._domain_ff_failures[domain])
+        self._bump(url, "ff_fail")
 
     def needs_playwright(self, url: str) -> bool:
         """检查域名是否已标记为 DYNAMIC，跳过 fast_fetch 直接走 Playwright。"""
@@ -160,6 +173,32 @@ class DynamicRenderer:
         domain = urlparse(url).hostname or ""
         if domain:
             self._domain_ff_failures[domain] = 0
+            self._domain_render_mode.pop(domain, None)
+        self._bump(url, "ff_ok")
+
+    def record_pw_result(self, url: str, ok: bool) -> None:
+        self._bump(url, "pw_ok" if ok else "pw_fail")
+
+    def record_ab_result(self, url: str, ok: bool) -> None:
+        self._bump(url, "ab_ok" if ok else "ab_fail")
+
+    def take_stat_deltas(self) -> dict[tuple[str, date], dict[str, int]]:
+        deltas = self._stat_deltas
+        self._stat_deltas = {}
+        return deltas
+
+    async def flush_render_stats(self) -> None:
+        """落库。失败只记日志，绝不影响采集主流程。"""
+        deltas = self.take_stat_deltas()
+        if not deltas:
+            return
+        try:
+            from app.core.database import AsyncSessionLocal
+            from app.modules.memory.service import upsert_stat_deltas
+            async with AsyncSessionLocal() as session:
+                await upsert_stat_deltas(session, deltas)
+        except Exception:
+            logger.warning("flush render stats failed", exc_info=True)
 
     async def shutdown(self):
         global _httpx_client
