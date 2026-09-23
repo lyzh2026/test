@@ -57,6 +57,9 @@ _DOMAIN_BLOCK_RESET_INTERVAL: float = 600.0  # 10 分钟重置一次
 # 任务级并发信号量，限制同时运行的协程数
 _task_concurrency_sem = asyncio.Semaphore(20)
 
+# AI Browser 全局并发信号量：兜底慢且贵，spec §6.3 / §11 要求全局并发固定 1
+_ai_browser_sem = asyncio.Semaphore(1)
+
 
 def _is_retryable(result: dict) -> bool:
     """判断错误是否可重试（网络类临时错误、非验证码拦截可重试，适配器/白名单类不可）。"""
@@ -1077,7 +1080,8 @@ def _emit_fallback_progress(task_id: str, done: int, total: int) -> None:
 async def _drain_fallback_queue(task_id: str, *, target_date: date) -> tuple[int, int]:
     """消费该任务已认领的兜底条目。返回 (入库成功数, 未入库数)。
 
-    并发固定 1（spec §6.3）：AI Browser 慢且贵，逐条串行。
+    并发固定 1（spec §6.3）：AI Browser 慢且贵。任务内逐条串行，任务之间由
+    `_ai_browser_sem` 全局串行，避免 N 个任务并发跑出 N 个 browser_use.Agent。
     """
     claimed = await _claim_fallback_batch(task_id)
     if not claimed:
@@ -1094,7 +1098,8 @@ async def _drain_fallback_queue(task_id: str, *, target_date: date) -> tuple[int
             break
         article_id = None
         try:
-            out = await ai_browser.browse_with_ai(url, **cfg)
+            async with _ai_browser_sem:
+                out = await ai_browser.browse_with_ai(url, **cfg)
             if out.get("ok"):
                 article_id = await _store_ai_browsed_article(
                     task_id=task_id,
@@ -1115,26 +1120,34 @@ async def _drain_fallback_queue(task_id: str, *, target_date: date) -> tuple[int
             fail_count += 1
             failed_ids.append((row_id, FALLBACK_FAIL_REASON))
 
-        await _mark_fallback_progress(task_id, done=idx, failed_ids=failed_ids)
+        # 进度记账是尽力而为的旁路：写失败不能把整条 drain 打断
+        try:
+            await _mark_fallback_progress(task_id, done=idx, failed_ids=failed_ids)
+        except Exception:
+            logger.exception("fallback progress update failed: task=%s", task_id)
         _emit_fallback_progress(task_id, idx, total)
 
     return ok_count, fail_count
 
 
 async def resume_fallback_queues() -> int:
-    """启动扫描：恢复 state='pending' 且任务仍在 fallback_running 的队列（spec §6.2）。
+    """启动扫描：恢复所有仍停在 fallback_running 的任务（spec §6.2）。
 
-    注意 scan_stale_running_tasks 只扫 running/pending，不会把 fallback_running 任务
-    判死——所以这里必须自己做恢复，否则任务会永久挂住、前端一直转圈。
+    直接按任务状态选，不能只挑还有 state='pending' 条目的任务——因为
+    `_claim_fallback_batch` 是一次性把该任务全部 pending 置 done 再执行，真正的崩溃
+    窗口是**整个 drain 过程**（browse_with_ai 少则几十秒），那时队列里早就没有 pending
+    行了。三个窗口一并覆盖：
+    1. 入队 commit 后、认领 commit 前崩溃 → pending 行还在，正常消费；
+    2. drain 途中崩溃 → 行已全部 done，`_drain_fallback_queue` 返回 (0,0) 后直接结算；
+    3. 入队 commit 本身失败 → 一行都没有，同样返回 (0,0) 后直接结算。
+
+    先认领再执行（spec §11）保证不会重复消费；启动时没有存活的 run_crawl_job，也不存在
+    竞态。注意 scan_stale_running_tasks 只扫 running/pending，不会把 fallback_running
+    任务判死——所以这里必须自己做恢复，否则任务会永久挂住、前端一直转圈。
     """
-    from app.models.routing import FallbackQueue
-
     async with AsyncSessionLocal() as session:
         res = await session.execute(
-            select(FallbackQueue.task_id)
-            .join(CrawlerTask, CrawlerTask.id == FallbackQueue.task_id)
-            .where(FallbackQueue.state == "pending", CrawlerTask.status == "fallback_running")
-            .distinct()
+            select(CrawlerTask.id).where(CrawlerTask.status == "fallback_running")
         )
         task_ids = [str(r) for r in res.scalars().all()]
 

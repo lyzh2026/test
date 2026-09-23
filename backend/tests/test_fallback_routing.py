@@ -43,11 +43,13 @@ async def test_render_failure_marked_fallback_after_retries():
 
 @pytest.mark.asyncio
 async def test_switch_off_returns_plain_failure_without_retrying_forever():
-    """开关关闭：没有任何 fallback 标记，走既有重试路径。"""
+    """开关关闭：没有任何 fallback 标记，走既有重试路径直到耗尽。"""
     attempts = AsyncMock(return_value={
         "ok": False, "code": 2001, "reason": "RENDER_FAILED", "stage": "render",
     })
-    with patch.object(service.settings, "CRAWLER_MAX_RETRIES", 1), \
+    # MAX_RETRIES=2：只有真的把既有重试循环跑满 2 次（含第一次退避），这个断言才有牙。
+    # 若写成 1，循环体在**任何**代码路径上都只跑一次，断言恒真。
+    with patch.object(service.settings, "CRAWLER_MAX_RETRIES", 2), \
             patch.object(service, "_crawl_one_attempt", attempts):
         res = await service._crawl_one(
             "t1", "https://slow.com/a", target_date=date(2026, 9, 23),
@@ -55,7 +57,7 @@ async def test_switch_off_returns_plain_failure_without_retrying_forever():
     assert "fallback" not in res
     assert "direct_fallback" not in res
     assert res["ok"] is False
-    assert attempts.await_count == 1
+    assert attempts.await_count == 2
 
 
 def test_render_failure_marks_fallback_only_when_enabled():

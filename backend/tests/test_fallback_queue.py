@@ -184,3 +184,156 @@ async def test_settle_after_fallback_counts_and_settles_status():
     # 终态那条事件必须带着修好的计数播出去，否则前端会定格在旧数字上
     assert bus.emit.call_count == 1
     assert bus.emit.call_args.args[0].status == "partial_failed"
+
+
+# ====== 三个只有靠突变测试才发现得了的守卫 ======
+
+
+def _fake_task() -> MagicMock:
+    task = MagicMock()
+    task.id = "t1"
+    task.status = "pending"
+    task.failed_details = []
+    task.failed_urls = 0
+    task.completed_urls = 0
+    task.total_urls = 1
+    task.fallback_done = 0
+    task.fallback_total = 0
+    task.completed_at = None
+    return task
+
+
+def _fake_session(task: MagicMock) -> MagicMock:
+    session = MagicMock()
+    session.get = AsyncMock(return_value=task)
+    session.commit = AsyncMock()
+    session.add = MagicMock()
+    return session
+
+
+def _session_cm(session: MagicMock) -> MagicMock:
+    """`async with AsyncSessionLocal() as session` 拿到的是 __aenter__ 的返回值。"""
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=session)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    return MagicMock(return_value=cm)
+
+
+def _patch_crawl_job(*, aibrowser_enabled: bool, crawl_result):
+    """run_crawl_job 的公共 patch 组：返回 (ExitStack, 资源字典)。"""
+    from contextlib import ExitStack
+
+    task = _fake_task()
+    session = _fake_session(task)
+    stack = ExitStack()
+    ab = stack.enter_context(patch.object(service, "ai_browser"))
+    rc = stack.enter_context(patch.object(service, "redis_client"))
+    rl = stack.enter_context(patch.object(service, "domain_rate_limiter"))
+    stack.enter_context(patch.object(service, "progress_bus"))
+    rend = stack.enter_context(patch.object(service, "renderer"))
+    crawl = stack.enter_context(patch.object(service, "_crawl_one", AsyncMock(return_value=crawl_result)))
+    stack.enter_context(patch.object(service, "AsyncSessionLocal", _session_cm(session)))
+
+    ab.is_ai_browser_enabled = AsyncMock(return_value=aibrowser_enabled)
+    ab.load_route_policy = AsyncMock(return_value={})
+    rc.smembers = AsyncMock(return_value=set())
+    rc.sadd = AsyncMock()
+    rc.expire = AsyncMock()
+    rl.acquire = AsyncMock()
+    rl.release = AsyncMock()
+    rend.flush_render_stats = AsyncMock()
+
+    return stack, {"task": task, "session": session, "crawl": crawl}
+
+
+@pytest.mark.asyncio
+async def test_settlement_survives_none_results():
+    """pin (i)：`_one` 因任务取消返回 None（service.py:357-360）时，结算块不能拿 None 去 .get。
+
+    没有 `res is not None` 这个守卫，`None.get("code", 2001)` 抛 AttributeError → 走
+    fatal 分支，任务被写成「任务异常终止」而不是正常结算。
+    """
+    stack, env = _patch_crawl_job(aibrowser_enabled=False, crawl_result=None)
+    with stack:
+        await service.run_crawl_job("t1", ["https://a.com/1"])
+
+    task = env["task"]
+    assert task.status == "failed"
+    assert task.failed_urls == 1  # 正常结算：failed 计数为 1
+    assert task.completed_at is not None
+    # 有守卫时 None 不进 failed_details；没有守卫时 fatal 分支会追加 stage='job' 明细
+    assert task.failed_details == []
+
+
+@pytest.mark.asyncio
+async def test_fatal_error_during_drain_leaves_task_failed():
+    """pin (ii)：drain 中途致命异常时，finally 谓词必须也认 fallback_running。
+
+    谓词只写 ("running",) 的话，任务会永远卡在 fallback_running——前端一直转圈。
+    """
+    stack, env = _patch_crawl_job(
+        aibrowser_enabled=True,
+        crawl_result={"ok": False, "fallback": True, "reason": "RENDER_FAILED", "stage": "render"},
+    )
+    with stack, patch.object(
+        service, "_drain_fallback_queue", AsyncMock(side_effect=RuntimeError("drain boom"))
+    ):
+        await service.run_crawl_job("t1", ["https://a.com/1"])
+
+    task = env["task"]
+    assert task.status == "failed"
+    assert task.completed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_cancel_task_accepts_fallback_running():
+    """pin (iii)：兜底窗口内的任务必须可取消，否则用户点了没反应。"""
+    task = _fake_task()
+    task.status = "fallback_running"
+    session = _fake_session(task)
+    try:
+        with patch.object(service, "AsyncSessionLocal", _session_cm(session)), \
+             patch.object(service, "scheduler"), \
+             patch.object(service, "progress_bus"):
+            ok = await service.cancel_task("t-cancel-fb")
+        assert ok is True
+        assert task.status == "cancelled"
+        assert task.completed_at is not None
+    finally:
+        service._cancelled_tasks.discard("t-cancel-fb")
+
+
+@pytest.mark.asyncio
+async def test_resume_scans_by_status_not_by_pending_rows():
+    """F1 回归：启动扫描必须按 status='fallback_running' 选任务。
+
+    只扫「还有 state='pending' 行」的任务只能救「入队后、认领前」那几毫秒；真正的崩溃
+    窗口是整个 drain（browse_with_ai 几十秒），那时 pending 行早已被一次性置 done。
+    """
+    task = MagicMock()
+    task.target_date = date(2026, 9, 23)
+
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = ["t1"]
+
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=result)
+    session.get = AsyncMock(return_value=task)
+
+    drain = AsyncMock(return_value=(1, 0))
+    settle = AsyncMock(return_value="completed")
+
+    with patch.object(service, "AsyncSessionLocal", _session_cm(session)), \
+         patch.object(service, "_drain_fallback_queue", drain), \
+         patch.object(service, "_settle_after_fallback", settle):
+        n = await service.resume_fallback_queues()
+
+    assert n == 1
+    drain.assert_awaited_once_with("t1", target_date=date(2026, 9, 23))
+    settle.assert_awaited_once_with("t1", ok=1)
+
+    # 断言扫的是 CrawlerTask.status，而不是 FallbackQueue.state='pending'
+    stmt = session.execute.call_args_list[0].args[0]
+    sql = str(stmt)
+    assert "crawler_tasks" in sql
+    assert "fallback_queue" not in sql
