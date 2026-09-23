@@ -130,3 +130,61 @@ class TestBrowseWithAi:
         assert isinstance(res, dict)
         assert res["ok"] is False
         assert res["reason"] == "AI Browser 输出无法解析为 JSON"
+
+    @pytest.mark.asyncio
+    async def test_non_string_field_values_return_ok_false(self, monkeypatch):
+        """字段值为非字符串（如数字）时必须收敛为 ok=False，不抛异常。"""
+
+        class _FakeHistory:
+            def final_result(self):
+                return '{"raw_content": 123456}'
+
+        class _FakeAgent:
+            def __init__(self, task=None, llm=None):
+                pass
+
+            async def run(self, *a, **k):
+                return _FakeHistory()
+
+        class _FakeChatOpenAI:
+            def __init__(self, **kwargs):
+                pass
+
+        fake_module = types.ModuleType("browser_use")
+        fake_module.Agent = _FakeAgent
+        fake_module.ChatOpenAI = _FakeChatOpenAI
+        monkeypatch.setitem(sys.modules, "browser_use", fake_module)
+
+        res = await browse_with_ai("https://example.com/x", api_key="k", base_url="", model="m")
+
+        assert isinstance(res, dict)
+        assert res["ok"] is False
+
+    @pytest.mark.asyncio
+    async def test_non_string_final_result_returns_ok_false(self, monkeypatch):
+        """final_result() 返回非字符串（如 dict）时必须收敛为 ok=False，不抛异常。"""
+
+        class _FakeHistory:
+            def final_result(self):
+                return {"a": 1}
+
+        class _FakeAgent:
+            def __init__(self, task=None, llm=None):
+                pass
+
+            async def run(self, *a, **k):
+                return _FakeHistory()
+
+        class _FakeChatOpenAI:
+            def __init__(self, **kwargs):
+                pass
+
+        fake_module = types.ModuleType("browser_use")
+        fake_module.Agent = _FakeAgent
+        fake_module.ChatOpenAI = _FakeChatOpenAI
+        monkeypatch.setitem(sys.modules, "browser_use", fake_module)
+
+        res = await browse_with_ai("https://example.com/x", api_key="k", base_url="", model="m")
+
+        assert isinstance(res, dict)
+        assert res["ok"] is False

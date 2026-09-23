@@ -111,7 +111,7 @@ async def browse_with_ai(url: str, *, api_key: str, base_url: str, model: str) -
     try:
         from browser_use import Agent
         from browser_use import ChatOpenAI
-    except ImportError as e:
+    except Exception as e:
         return {"ok": False, "reason": f"browser-use 不可用：{e!r}"}
 
     try:
@@ -123,19 +123,23 @@ async def browse_with_ai(url: str, *, api_key: str, base_url: str, model: str) -
         logger.warning("ai browser run failed: %s (%r)", url, e)
         return {"ok": False, "reason": f"AI Browser 执行失败：{e!r}"}
 
-    data = _extract_json_simple(text or "")
+    data = _extract_json_simple(text if isinstance(text, str) else str(text))
     if not isinstance(data, dict):
         return {"ok": False, "reason": "AI Browser 输出无法解析为 JSON"}
 
-    content = (data.get("raw_content") or "").strip()
+    def _field(key: str) -> str:
+        value = data.get(key)
+        return value.strip() if isinstance(value, str) else ""
+
+    content = _field("raw_content")
     if len(content) < 100:
-        return {"ok": False, "reason": data.get("error") or "AI Browser 未取回有效正文"}
+        return {"ok": False, "reason": _field("error") or "AI Browser 未取回有效正文"}
 
     return {
         "ok": True,
-        "title": (data.get("original_title") or "").strip(),
+        "title": _field("original_title"),
         "content": content,
-        "source": (data.get("source") or "").strip() or None,
-        "date_str": (data.get("date_str") or "").strip() or None,
+        "source": _field("source") or None,
+        "date_str": _field("date_str") or None,
         "reason": "",
     }
