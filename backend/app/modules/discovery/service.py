@@ -1513,6 +1513,8 @@ async def discover_articles(
     if len(article_results) > max_links:
         logger.info("discovery: collected %d, truncated to top %d by score",
                      len(article_results), max_links)
+    # 渲染统计落库（失败不影响主流程）：扫描不经 run_crawl_job，故此处也须 flush
+    await renderer.flush_render_stats()
     return article_results[:max_links]
 
 

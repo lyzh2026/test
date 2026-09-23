@@ -102,17 +102,20 @@ async def put_draft(
     except ValueError as e:
         return error(2004, str(e), http_status=400, request=request)
 
-    draft = await save_draft(
-        session,
-        article_id=article_id,
-        title=payload.title,
-        body=payload.body,
-        template=payload.template,
-        editor=user.username,
-        old_title=current.title or "",
-        old_body=current.body or "",
-        old_version=current.version,
-    )
+    try:
+        draft = await save_draft(
+            session,
+            article_id=article_id,
+            title=payload.title,
+            body=payload.body,
+            template=payload.template,
+            editor=user.username,
+            old_title=current.title or "",
+            old_body=current.body or "",
+            old_version=current.version,
+        )
+    except ValueError as e:
+        return error(2004, str(e), http_status=400, request=request)
     return success(
         {"title": draft.title, "body": draft.body, "template": draft.template, "version": draft.version},
         request=request,

@@ -4,6 +4,7 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.core.config import settings
 from app.models.article import Article
@@ -332,6 +333,10 @@ async def save_draft(
             old_value={"body": old_body}, new_value={"body": body}, editor=editor,
         ))
 
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise ValueError("草稿版本冲突，请刷新后重试")
     await session.refresh(draft)
     return draft

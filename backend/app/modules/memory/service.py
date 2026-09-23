@@ -2,18 +2,15 @@
 
 可测逻辑全部抽成纯函数，DB 存取只做最薄的包装。
 """
-import logging
 import uuid
 from datetime import date
 from typing import Any
 
-from sqlalchemy import Date, Integer, String, func, select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.memory import EditRecord, SiteRenderStat
-
-logger = logging.getLogger(__name__)
 
 _COUNTERS = ("ff_ok", "ff_fail", "pw_ok", "pw_fail", "ab_ok", "ab_fail")
 
@@ -40,7 +37,7 @@ def build_edit_record(
 
 
 def summarize_site_stats(rows: list[SiteRenderStat]) -> list[dict]:
-    """降级站点排行，按 fail_count 降序。"""
+    """降级站点排行，按 fail_count 降序，同分按域名升序（保证排序可复现）。"""
     out: list[dict] = []
     for r in rows:
         ok = (r.ff_ok or 0) + (r.pw_ok or 0) + (r.ab_ok or 0)
@@ -52,7 +49,7 @@ def summarize_site_stats(rows: list[SiteRenderStat]) -> list[dict]:
             "fail_count": fail,
             "fail_rate": round(fail / attempts, 4) if attempts else 0.0,
         })
-    out.sort(key=lambda d: d["fail_count"], reverse=True)
+    out.sort(key=lambda d: (-d["fail_count"], d["domain"]))
     return out
 
 
@@ -122,6 +119,7 @@ async def list_site_stats(
     stmt = (
         select(
             SiteRenderStat.domain.label("domain"),
+            func.max(SiteRenderStat.stat_date).label("stat_date"),
             func.sum(SiteRenderStat.ff_ok).label("ff_ok"),
             func.sum(SiteRenderStat.ff_fail).label("ff_fail"),
             func.sum(SiteRenderStat.pw_ok).label("pw_ok"),
@@ -141,7 +139,7 @@ async def list_site_stats(
     for r in rows:
         s = SiteRenderStat()
         s.domain = r.domain
-        s.stat_date = date.today()
+        s.stat_date = r.stat_date
         for c in _COUNTERS:
             setattr(s, c, int(getattr(r, c) or 0))
         out.append(s)

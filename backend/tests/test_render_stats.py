@@ -52,3 +52,15 @@ async def test_domain_fingerprint_still_works():
     # DYNAMIC 是单向闩锁：成功只重置失败计数，不清除标记；命中后不再走 fast_fetch，
     # 故生产中不会再调到这里。断言 True 即为守护这一既有语义。
     assert r.needs_playwright("https://slow.com/4") is True
+
+
+@pytest.mark.asyncio
+async def test_ff_success_resets_consecutive_failure_counter():
+    """连续失败计数会被成功重置：2 败 → 成功 → 2 败（累计 4 败）仍不应闩锁。"""
+    r = DynamicRenderer()
+    await r.record_ff_failure("https://f.com/1")
+    await r.record_ff_failure("https://f.com/2")
+    r.record_ff_success("https://f.com/3")
+    await r.record_ff_failure("https://f.com/4")
+    await r.record_ff_failure("https://f.com/5")
+    assert r.needs_playwright("https://f.com/6") is False
