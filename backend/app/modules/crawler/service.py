@@ -535,7 +535,15 @@ async def run_crawl_job(task_id: str, urls: list[str]):
         logger.info("crawl job end: task=%s status=%s", task_id, final_status)
 
 
-async def _crawl_one(task_id: str, url: str, *, target_date: date, date_to: date | None = None) -> dict:
+async def _crawl_one(
+    task_id: str,
+    url: str,
+    *,
+    target_date: date,
+    date_to: date | None = None,
+    aibrowser_enabled: bool = False,
+    route_policy: dict[str, str] | None = None,
+) -> dict:
     """带自动重试的外层入口：最多重试 CRAWLER_MAX_RETRIES 次，指数退避+拦截应对。"""
     domain = urlparse(url).hostname or "unknown"
     # 定期重置 block 计数器，避免延迟永久累加
@@ -548,7 +556,13 @@ async def _crawl_one(task_id: str, url: str, *, target_date: date, date_to: date
     for attempt in range(1, settings.CRAWLER_MAX_RETRIES + 1):
         if task_id in _cancelled_tasks:
             return {"ok": False, "code": 5001, "reason": "任务已取消", "stage": "cancelled"}
-        result = await _crawl_one_attempt(task_id, url, target_date=target_date, date_to=date_to)
+        result = await _crawl_one_attempt(
+            task_id, url,
+            target_date=target_date, date_to=date_to,
+            aibrowser_enabled=aibrowser_enabled, route_policy=route_policy,
+        )
+        if result.get("direct_fallback"):
+            return result  # 白名单直连：不重试，立即交给兜底队列
         ok = result.get("ok", False)
         dedup = result.get("dedup", False)
         filtered = result.get("filtered", False)
@@ -620,7 +634,27 @@ def _dual_filter_pipeline(html: str) -> str:
     return bm25_result
 
 
-async def _crawl_one_attempt(task_id: str, url: str, *, target_date: date, date_to: date | None = None) -> dict:
+def _render_failure(reason: str, aibrowser_enabled: bool, *, code: int) -> dict:
+    """渲染失败的返回体。
+
+    开关开启时打上 fallback 标记 → 调用方会把它推迟到兜底队列；
+    关闭时返回裸失败体 → 与改动前的行为完全一致（spec §12 验收 1）。
+    """
+    result = {"ok": False, "code": code, "reason": reason, "stage": "render"}
+    if aibrowser_enabled:
+        result["fallback"] = True
+    return result
+
+
+async def _crawl_one_attempt(
+    task_id: str,
+    url: str,
+    *,
+    target_date: date,
+    date_to: date | None = None,
+    aibrowser_enabled: bool = False,
+    route_policy: dict[str, str] | None = None,
+) -> dict:
     """单 URL：渲染 → 内容过滤/缓存 → 降级链 → 翻页合并 → 日期过滤 → 入库 → 触发 AI。"""
     from app.modules.crawler.cache import page_cache
 
@@ -642,6 +676,13 @@ async def _crawl_one_attempt(task_id: str, url: str, *, target_date: date, date_
             goto_extract = True
 
     if not goto_extract:
+        # ====== 白名单直连：开关开启且 mode=always_aibrowser 时跳过前三层 ======
+        if aibrowser_enabled:
+            from app.modules.crawler.ai_browser import should_direct_connect
+            if should_direct_connect(url, route_policy or {}, aibrowser_enabled):
+                logger.info("render route: direct to ai browser (whitelist): %s", url)
+                return {"ok": False, "direct_fallback": True, "reason": "whitelist", "stage": "render"}
+
         # ====== 渲染（域名指纹 → httpx 快速请求 → Playwright） ======
         try:
             if renderer.needs_playwright(url):
@@ -658,9 +699,13 @@ async def _crawl_one_attempt(task_id: str, url: str, *, target_date: date, date_
                     renderer.record_pw_result(url, bool(rendered.get("ok")))
         except Exception as e:
             logger.exception("render failed: %s", url)
-            return {"ok": False, "code": 2001, "reason": f"渲染失败：{e!r}", "stage": "render"}
+            return _render_failure(
+                f"渲染失败：{e!r}", aibrowser_enabled, code=2001
+            )
         if not rendered.get("ok"):
-            return {"ok": False, "code": 2001, "reason": rendered.get("reason", "RENDER_FAILED"), "stage": "render"}
+            return _render_failure(
+                rendered.get("reason", "RENDER_FAILED"), aibrowser_enabled, code=2001
+            )
 
         raw_html = rendered["html"]
         final_url = rendered.get("final_url") or url
