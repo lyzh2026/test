@@ -1,8 +1,8 @@
 """白名单 CRUD + 系统设置 API。"""
 import os
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Request, UploadFile, File
+from fastapi import APIRouter, Depends, Request, UploadFile, File, Query
 from openai import AsyncOpenAI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,6 +31,19 @@ def _serialize(item: AllowedDomain) -> dict:
         "created_by": item.created_by,
         "created_at": item.created_at.isoformat() if item.created_at else None,
         "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+    }
+
+
+def _serialize_edit_record(rec) -> dict:
+    return {
+        "id": str(rec.id),
+        "target_type": rec.target_type,
+        "target_id": str(rec.target_id),
+        "field": rec.field,
+        "old_value": rec.old_value,
+        "new_value": rec.new_value,
+        "editor": rec.editor,
+        "created_at": rec.created_at.isoformat() if rec.created_at else None,
     }
 
 
@@ -390,3 +403,44 @@ async def update_category_labels(
     await session.commit()
 
     return success({"labels": cleaned}, request=request)
+
+
+@router.get("/memory/edit-records")
+async def list_memory_edit_records(
+    request: Request,
+    type: str | None = Query(default=None, max_length=16),
+    date_from: date | None = Query(default=None, alias="from"),
+    date_to: date | None = Query(default=None, alias="to"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    _: object = Depends(current_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """分页查人工修改记录。"""
+    from app.modules.memory.service import list_edit_records
+
+    if type and type not in ("category", "tweet"):
+        return error(1001, "type 只能是 category 或 tweet", http_status=400, request=request)
+
+    rows, total = await list_edit_records(
+        session, target_type=type, date_from=date_from, date_to=date_to, limit=limit, offset=offset
+    )
+    return success(
+        {"items": [_serialize_edit_record(r) for r in rows], "total": total, "limit": limit, "offset": offset},
+        request=request,
+    )
+
+
+@router.get("/memory/site-stats")
+async def list_memory_site_stats(
+    request: Request,
+    days: int = Query(default=7, ge=1, le=90),
+    _: object = Depends(current_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """站点降级排行（按失败次数降序）。"""
+    from app.modules.memory.service import list_site_stats, summarize_site_stats
+
+    today = date.today()
+    rows = await list_site_stats(session, date_from=today - timedelta(days=days - 1), date_to=today)
+    return success({"items": summarize_site_stats(rows)}, request=request)
