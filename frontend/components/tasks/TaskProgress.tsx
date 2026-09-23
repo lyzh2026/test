@@ -9,6 +9,9 @@ type ProgressData = {
   total: number;
   current_url: string | null;
   message: string | null;
+  tier?: string | null;
+  fallback_done?: number;
+  fallback_total?: number;
 };
 
 const TERMINAL_STATUSES = ['completed', 'failed', 'partial_failed', 'cancelled'];
@@ -19,12 +22,16 @@ export function TaskProgress({
   initialFailed,
   initialTotal,
   initialStatus,
+  initialFallbackDone = 0,
+  initialFallbackTotal = 0,
 }: {
   taskId: string;
   initialCompleted: number;
   initialFailed: number;
   initialTotal: number;
   initialStatus: string;
+  initialFallbackDone?: number;
+  initialFallbackTotal?: number;
 }) {
   const [prog, setProg] = useState({
     completed: initialCompleted,
@@ -33,6 +40,9 @@ export function TaskProgress({
     status: initialStatus,
     currentUrl: null as string | null,
     message: null as string | null,
+    tier: null as string | null,
+    fallbackDone: initialFallbackDone,
+    fallbackTotal: initialFallbackTotal,
   });
   const wsRef = useRef<WebSocket | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -58,6 +68,14 @@ export function TaskProgress({
   }, [initialStatus, initialCompleted, initialFailed, initialTotal]);
 
   useEffect(() => {
+    setProg((prev) => ({
+      ...prev,
+      fallbackDone: initialFallbackDone,
+      fallbackTotal: initialFallbackTotal,
+    }));
+  }, [initialFallbackDone, initialFallbackTotal]);
+
+  useEffect(() => {
     if (TERMINAL_STATUSES.includes(initialStatus)) return;
 
     function connectWs() {
@@ -76,6 +94,9 @@ export function TaskProgress({
             status: data.status ?? prev.status,
             currentUrl: data.current_url ?? prev.currentUrl,
             message: data.message ?? prev.message,
+            tier: data.tier ?? prev.tier,
+            fallbackDone: data.fallback_done ?? prev.fallbackDone,
+            fallbackTotal: data.fallback_total ?? prev.fallbackTotal,
           }));
           if (TERMINAL_STATUSES.includes(data.status)) {
             ws.close();
@@ -115,6 +136,8 @@ export function TaskProgress({
               failed: d.failed_urls,
               total: d.total_urls,
               status: d.status,
+              fallbackDone: d.fallback_done ?? prev.fallbackDone,
+              fallbackTotal: d.fallback_total ?? prev.fallbackTotal,
             }));
           }
         } catch {
@@ -150,6 +173,21 @@ export function TaskProgress({
           style={{ width: `${pct}%`, background: '#3b82f6' }}
         />
       </div>
+
+      {(prog.status === 'fallback_running' || prog.tier === 'aibrowser') && !isFinished && (
+        <div className="mt-2 flex items-center gap-2 text-xs">
+          {prog.status === 'fallback_running' && (
+            <span className="rounded px-2 py-0.5" style={{ background: 'rgba(59, 130, 246, 0.1)', color: '#3b82f6' }}>
+              兜底中 {prog.fallbackDone}/{prog.fallbackTotal}
+            </span>
+          )}
+          {prog.tier === 'aibrowser' && (
+            <span className="rounded px-2 py-0.5" style={{ background: 'rgba(168, 85, 247, 0.1)', color: '#a855f7' }}>
+              browser兜底
+            </span>
+          )}
+        </div>
+      )}
 
       {prog.currentUrl && !isFinished && (
         <p className="mt-2 truncate text-xs" style={{ color: '#9ca3af' }} title={prog.currentUrl}>

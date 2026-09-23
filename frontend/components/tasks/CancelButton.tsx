@@ -10,7 +10,7 @@ export function CancelButton({ taskId, status }: { taskId: string; status: strin
   const router = useRouter();
   const { toast, confirm } = useToast();
 
-  if (status !== 'running' && status !== 'pending') return null;
+  if (status !== 'running' && status !== 'pending' && status !== 'fallback_running') return null;
 
   async function handleCancel() {
     if (!await confirm('确认取消此任务？')) return;
