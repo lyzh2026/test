@@ -1,10 +1,13 @@
 """渲染路由判定与开关读取。不连 DB、不装 browser-use。"""
+import sys
+import types
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from app.modules.crawler.ai_browser import (
     MODE_ALWAYS_AIBROWSER,
+    browse_with_ai,
     domain_of,
     is_ai_browser_enabled,
     load_route_policy,
@@ -95,3 +98,35 @@ class TestLoadRoutePolicy:
         session = AsyncMock()
         session.execute = AsyncMock(side_effect=RuntimeError("db down"))
         assert await load_route_policy(session) == {}
+
+
+class TestBrowseWithAi:
+    @pytest.mark.asyncio
+    async def test_non_dict_json_output_returns_ok_false(self, monkeypatch):
+        """AI 返回合法 JSON 但不是对象（如数组）时必须收敛为 ok=False，不抛异常。"""
+
+        class _FakeHistory:
+            def final_result(self):
+                return '["a", "b"]'
+
+        class _FakeAgent:
+            def __init__(self, task=None, llm=None):
+                pass
+
+            async def run(self, *a, **k):
+                return _FakeHistory()
+
+        class _FakeChatOpenAI:
+            def __init__(self, **kwargs):
+                pass
+
+        fake_module = types.ModuleType("browser_use")
+        fake_module.Agent = _FakeAgent
+        fake_module.ChatOpenAI = _FakeChatOpenAI
+        monkeypatch.setitem(sys.modules, "browser_use", fake_module)
+
+        res = await browse_with_ai("https://example.com/x", api_key="k", base_url="", model="m")
+
+        assert isinstance(res, dict)
+        assert res["ok"] is False
+        assert res["reason"] == "AI Browser 输出无法解析为 JSON"

@@ -124,7 +124,7 @@ async def browse_with_ai(url: str, *, api_key: str, base_url: str, model: str) -
         return {"ok": False, "reason": f"AI Browser 执行失败：{e!r}"}
 
     data = _extract_json_simple(text or "")
-    if not data:
+    if not isinstance(data, dict):
         return {"ok": False, "reason": "AI Browser 输出无法解析为 JSON"}
 
     content = (data.get("raw_content") or "").strip()
