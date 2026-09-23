@@ -123,14 +123,13 @@ async def render_article(
     article_id: str,
     template_name: str = "green-simple",
 ) -> dict:
-    """Render an article's content as WeChat-compatible styled HTML."""
+    """渲染微信推文。有草稿则渲染最新草稿，否则按现有 AI 改写生成 v1 并落库。"""
     render_fn = TEMPLATES.get(template_name)
     if render_fn is None:
         valid = ", ".join(sorted(TEMPLATES))
         raise ValueError(f"未知模板：{template_name}，可选：{valid}")
 
-    data = await _fetch_article_data(session, article_id)
-    data = await _ai_rewrite_for_wechat(data)
+    data, _ = await resolve_draft_data(session, article_id)
 
     html = render_fn(
         title=data["title"],
