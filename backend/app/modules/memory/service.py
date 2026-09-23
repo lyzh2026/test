@@ -115,8 +115,10 @@ async def list_edit_records(
     return list(rows), total
 
 
-async def list_site_stats(session: AsyncSession, *, days: int = 7) -> list[SiteRenderStat]:
-    """取最近 days 天的按域名聚合结果。"""
+async def list_site_stats(
+    session: AsyncSession, *, date_from: date | None = None, date_to: date | None = None
+) -> list[SiteRenderStat]:
+    """取 `stat_date` 落在 [date_from, date_to] 内的按域名聚合结果。"""
     stmt = (
         select(
             SiteRenderStat.domain.label("domain"),
@@ -127,9 +129,13 @@ async def list_site_stats(session: AsyncSession, *, days: int = 7) -> list[SiteR
             func.sum(SiteRenderStat.ab_ok).label("ab_ok"),
             func.sum(SiteRenderStat.ab_fail).label("ab_fail"),
         )
-        .where(SiteRenderStat.stat_date >= func.current_date() - days)
         .group_by(SiteRenderStat.domain)
     )
+    if date_from is not None:
+        stmt = stmt.where(SiteRenderStat.stat_date >= date_from)
+    if date_to is not None:
+        stmt = stmt.where(SiteRenderStat.stat_date <= date_to)
+
     rows = (await session.execute(stmt)).all()
     out = []
     for r in rows:
