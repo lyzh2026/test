@@ -47,6 +47,19 @@ def _serialize_edit_record(rec) -> dict:
     }
 
 
+def _serialize_render_policy(item) -> dict:
+    return {
+        "id": str(item.id),
+        "domain": item.domain,
+        "mode": item.mode,
+        "source": item.source,
+        "reason": item.reason,
+        "promoted_at": item.promoted_at.isoformat() if item.promoted_at else None,
+        "enabled": bool(item.enabled),
+        "created_at": item.created_at.isoformat() if item.created_at else None,
+    }
+
+
 @router.get("/allowlist")
 async def list_allowed(
     request: Request,
@@ -444,3 +457,143 @@ async def list_memory_site_stats(
     today = date.today()
     rows = await list_site_stats(session, date_from=today - timedelta(days=days - 1), date_to=today)
     return success({"items": summarize_site_stats(rows)}, request=request)
+
+
+# ── AI Browser 兜底开关与渲染路由白名单 ──────────────────────
+
+
+@router.get("/settings/ai-browser")
+async def get_ai_browser_settings(
+    request: Request,
+    _: object = Depends(current_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    from app.modules.crawler.ai_browser import AI_BROWSER_ENABLED_KEY
+
+    result = await session.execute(
+        select(SystemConfig).where(SystemConfig.key == AI_BROWSER_ENABLED_KEY)
+    )
+    cfg = result.scalar_one_or_none()
+    enabled = bool(cfg.value.get("enabled", False)) if cfg and isinstance(cfg.value, dict) else False
+    return success({"enabled": enabled}, request=request)
+
+
+@router.put("/settings/ai-browser")
+async def update_ai_browser_settings(
+    payload: dict,
+    request: Request,
+    _: object = Depends(current_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    from app.modules.crawler.ai_browser import AI_BROWSER_ENABLED_KEY
+
+    if not isinstance(payload.get("enabled"), bool):
+        return error(1001, "enabled 必须为布尔值", http_status=400, request=request)
+
+    result = await session.execute(
+        select(SystemConfig).where(SystemConfig.key == AI_BROWSER_ENABLED_KEY)
+    )
+    cfg = result.scalar_one_or_none()
+    if cfg:
+        cfg.value = {"enabled": payload["enabled"]}
+    else:
+        session.add(SystemConfig(key=AI_BROWSER_ENABLED_KEY, value={"enabled": payload["enabled"]}))
+    await session.commit()
+    return success({"enabled": payload["enabled"]}, request=request)
+
+
+@router.get("/render-policy")
+async def list_render_policies(
+    request: Request,
+    _: object = Depends(current_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    from app.models.routing import RenderRoutePolicy
+
+    res = await session.execute(select(RenderRoutePolicy).order_by(RenderRoutePolicy.domain))
+    items = [_serialize_render_policy(r) for r in res.scalars().all()]
+    return success({"items": items}, request=request)
+
+
+@router.post("/render-policy")
+async def create_render_policy(
+    payload: dict,
+    request: Request,
+    _: object = Depends(current_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    from app.modules.crawler.ai_browser import MODE_ALWAYS_AIBROWSER, VALID_MODES, domain_of
+    from app.models.routing import RenderRoutePolicy
+
+    raw = (payload.get("domain") or "").strip()
+    domain = domain_of(raw) or domain_of(f"https://{raw}")
+    if not domain:
+        return error(1001, "domain 无效", http_status=400, request=request)
+
+    mode = (payload.get("mode") or MODE_ALWAYS_AIBROWSER).strip()
+    if mode not in VALID_MODES:
+        return error(1001, f"mode 只能是 {'/'.join(VALID_MODES)}", http_status=400, request=request)
+
+    existing = await session.execute(
+        select(RenderRoutePolicy).where(RenderRoutePolicy.domain == domain)
+    )
+    if existing.scalar_one_or_none():
+        return error(1002, "该域名的路由策略已存在", http_status=409, request=request)
+
+    item = RenderRoutePolicy(
+        domain=domain, mode=mode, source="manual",
+        reason=(payload.get("reason") or "").strip() or None, enabled=True,
+    )
+    session.add(item)
+    await session.commit()
+    await session.refresh(item)
+    return success(_serialize_render_policy(item), request=request)
+
+
+@router.put("/render-policy/{item_id}")
+async def update_render_policy(
+    item_id: str,
+    payload: dict,
+    request: Request,
+    _: object = Depends(current_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    from app.modules.crawler.ai_browser import VALID_MODES
+    from app.models.routing import RenderRoutePolicy
+
+    item = await session.get(RenderRoutePolicy, item_id)
+    if not item:
+        return error(1002, "路由策略不存在", http_status=404, request=request)
+
+    if "mode" in payload:
+        if payload["mode"] not in VALID_MODES:
+            return error(1001, f"mode 只能是 {'/'.join(VALID_MODES)}", http_status=400, request=request)
+        item.mode = payload["mode"]
+    if "enabled" in payload:
+        if not isinstance(payload["enabled"], bool):
+            return error(1001, "enabled 必须为布尔值", http_status=400, request=request)
+        item.enabled = payload["enabled"]
+    if "reason" in payload:
+        item.reason = (payload["reason"] or "").strip() or None
+
+    await session.commit()
+    await session.refresh(item)
+    return success(_serialize_render_policy(item), request=request)
+
+
+@router.delete("/render-policy/{item_id}")
+async def delete_render_policy(
+    item_id: str,
+    request: Request,
+    _: object = Depends(current_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    from app.models.routing import RenderRoutePolicy
+
+    item = await session.get(RenderRoutePolicy, item_id)
+    if not item:
+        return error(1002, "路由策略不存在", http_status=404, request=request)
+    await session.delete(item)
+    await session.commit()
+    return success({"id": item_id}, request=request)
+
