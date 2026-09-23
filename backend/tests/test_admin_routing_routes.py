@@ -88,6 +88,8 @@ class _FakeSession:
             return _FakeResult(one=self.config)
         if stmt.whereclause is None:  # 列表查询（只有 order_by）
             return _FakeResult(many=list(self.policies))
+        # 局限：忽略 where 条件，任何带条件的查询都返回 policies[0]。
+        # 今天够用（重复域名测试在删掉查重后确实会失败），但将来若 POST 另一个域名并再去查重，会误报 409。
         return _FakeResult(one=self.policies[0] if self.policies else None)
 
     def add(self, obj):
@@ -163,6 +165,18 @@ def test_put_ai_browser_settings_rejects_non_boolean(client):
     assert resp.status_code == 400
     assert resp.json()["code"] == 1001
     assert session.config is None
+
+
+def test_get_ai_browser_settings_reflects_persisted_true(client):
+    tc, _ = client
+    put_resp = tc.put("/api/v1/admin/settings/ai-browser", json={"enabled": True})
+    assert put_resp.status_code == 200
+    assert put_resp.json()["data"]["enabled"] is True
+
+    resp = tc.get("/api/v1/admin/settings/ai-browser")
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["enabled"] is True
 
 
 def test_create_render_policy_defaults_to_manual_always_aibrowser(client):
