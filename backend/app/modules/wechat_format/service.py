@@ -1,5 +1,6 @@
 import json
 import re
+import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -7,7 +8,9 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.models.article import Article
 from app.models.ai_analysis import AIAnalysis
+from app.models.memory import TweetDraft
 from app.modules.ai.kimi_client import get_llm_client
+from app.modules.memory.service import build_edit_record
 from .templates import _split_paragraphs, TEMPLATES
 
 # 内存缓存 AI 重写结果，避免切换模板时重复生成
@@ -250,3 +253,86 @@ async def export_html(
     data = await _ai_rewrite_for_wechat(data)
     content = build_html_document(data, template_name)
     return data["title"], content
+
+
+def next_version(existing: list[TweetDraft]) -> int:
+    """草稿版本号：无草稿 → 1，否则最大版本 + 1。"""
+    if not existing:
+        return 1
+    return max(d.version for d in existing) + 1
+
+
+def draft_to_data(base: dict, draft: TweetDraft) -> dict:
+    """把草稿的标题/正文覆盖回 data 形态，其余字段保留。"""
+    body = draft.body or ""
+    return {
+        **base,
+        "title": draft.title or base.get("title", ""),
+        "paragraphs": _split_paragraphs(body) if body else base.get("paragraphs", []),
+    }
+
+
+async def _load_drafts(session: AsyncSession, article_id: str) -> list[TweetDraft]:
+    res = await session.execute(select(TweetDraft).where(TweetDraft.article_id == article_id))
+    return list(res.scalars().all())
+
+
+async def resolve_draft_data(session: AsyncSession, article_id: str) -> tuple[dict, TweetDraft]:
+    """取最新版草稿；无草稿时按现有 AI 改写生成 v1 并落库。"""
+    drafts = await _load_drafts(session, article_id)
+    if drafts:
+        latest = max(drafts, key=lambda d: d.version)
+        base = await _fetch_article_data(session, article_id)
+        return draft_to_data(base, latest), latest
+
+    base = await _fetch_article_data(session, article_id)
+    rewritten = await _ai_rewrite_for_wechat(base)
+    draft = TweetDraft(
+        article_id=article_id,
+        title=rewritten.get("title", ""),
+        body="\n\n".join(rewritten.get("paragraphs", [])),
+        template="green-simple",
+        version=1,
+    )
+    session.add(draft)
+    await session.commit()
+    await session.refresh(draft)
+    return draft_to_data(base, draft), draft
+
+
+async def save_draft(
+    session: AsyncSession,
+    *,
+    article_id: str,
+    title: str,
+    body: str,
+    template: str,
+    editor: str | None,
+    old_title: str,
+    old_body: str,
+    old_version: int,
+) -> TweetDraft:
+    """保存为新版本（不覆盖），并写 edit_records。"""
+    draft = TweetDraft(
+        article_id=article_id,
+        title=title,
+        body=body,
+        template=template,
+        version=old_version + 1,
+    )
+    session.add(draft)
+
+    if title != old_title:
+        session.add(build_edit_record(
+            target_type="tweet", target_id=uuid.UUID(article_id), field="title",
+            old_value={"title": old_title}, new_value={"title": title}, editor=editor,
+        ))
+    if body != old_body:
+        session.add(build_edit_record(
+            target_type="tweet", target_id=uuid.UUID(article_id), field="body",
+            old_value={"body": old_body}, new_value={"body": body}, editor=editor,
+        ))
+
+    await session.commit()
+    await session.refresh(draft)
+    return draft
