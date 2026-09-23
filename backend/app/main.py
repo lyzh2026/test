@@ -69,6 +69,12 @@ async def lifespan(app: FastAPI):
     if stale:
         logger.info("startup: cleaned %s stale running tasks", stale)
 
+    # 恢复上次重启时中断的兜底队列（fallback_running 不在僵尸扫描范围内）
+    from app.modules.crawler.service import resume_fallback_queues
+    resumed = await resume_fallback_queues()
+    if resumed:
+        logger.info("startup: resumed %s fallback queues", resumed)
+
     if not scheduler.running:
         scheduler.start()
     scheduler.add_job(

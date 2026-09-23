@@ -55,6 +55,7 @@ async def test_switch_off_returns_plain_failure_without_retrying_forever():
     assert "fallback" not in res
     assert "direct_fallback" not in res
     assert res["ok"] is False
+    assert attempts.await_count == 1
 
 
 def test_render_failure_marks_fallback_only_when_enabled():

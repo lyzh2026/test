@@ -19,6 +19,8 @@ from app.core.scheduler import scheduler
 from app.models.allowed_domain import AllowedDomain
 from app.models.article import Article
 from app.models.crawler_task import CrawlerTask
+from app.models.routing import FallbackQueue
+from app.modules.crawler import ai_browser
 from app.modules.crawler.adapters.base import RenderedPage, SpiderAdapter
 from app.modules.crawler.adapters.llm_extraction_adapter import LLMExtractionAdapter
 from app.modules.crawler.adapters.readability_adapter import ReadabilityAdapter, _extract_date_from_text, _has_date_hints, _has_publish_date_hints, _html_to_plaintext
@@ -72,6 +74,43 @@ def _is_retryable(result: dict) -> bool:
     return False
 
 
+FALLBACK_FAIL_REASON = "AI Browser 未取回可用正文"
+
+
+def classify_result(res) -> str:
+    """把一个 URL 的抓取结果归类。
+
+    fallback 表示等待 AI Browser 兜底——按 spec §6.1 既不计入完成也不计入失败。
+    """
+    if isinstance(res, Exception):
+        return "failed"
+    if not isinstance(res, dict):
+        return "failed"
+    if res.get("ok"):
+        return "done"
+    if res.get("dedup") or res.get("filtered"):
+        return "filtered"
+    if res.get("fallback") or res.get("direct_fallback"):
+        return "fallback"
+    return "failed"
+
+
+def settle_status(*, completed: int, failed: int, filtered: int) -> str:
+    """任务终态判定。与改动前 `run_crawl_job` 中的规则逐条一致。"""
+    if failed == 0 and completed == 0 and filtered > 0:
+        return "partial_failed"  # 全部被过滤，无实际入库文章
+    if failed == 0:
+        return "completed"
+    if completed == 0:
+        return "failed"
+    return "partial_failed"
+
+
+def fallback_mark_ok(article_id: str | None) -> bool:
+    """兜底是否真正入库了。None 表示没入库（去重命中 / 内容过短 / 未取回）。"""
+    return article_id is not None
+
+
 async def cancel_task(task_id: str) -> bool:
     """标记任务为取消，移除调度 job。"""
     _cancelled_tasks.add(task_id)
@@ -81,7 +120,7 @@ async def cancel_task(task_id: str) -> bool:
         pass  # job 可能已不在调度器中
     async with AsyncSessionLocal() as session:
         t = await session.get(CrawlerTask, task_id)
-        if t and t.status in ("running", "pending"):
+        if t and t.status in ("running", "pending", "fallback_running"):
             t.status = "cancelled"
             t.completed_at = datetime.now(timezone.utc)
             await session.commit()
@@ -319,6 +358,10 @@ async def run_crawl_job(task_id: str, urls: list[str]):
         task.started_at = datetime.now(timezone.utc)
         await session.commit()
 
+        # 兜底开关与路由策略：整个任务只读一次
+        aibrowser_enabled = await ai_browser.is_ai_browser_enabled(session)
+        route_policy = await ai_browser.load_route_policy(session) if aibrowser_enabled else {}
+
     # 断点续爬：过滤掉已完成的 URL
     done_key = f"{_CRAWL_DONE_KEY_PREFIX}{task_id}"
     try:
@@ -345,6 +388,7 @@ async def run_crawl_job(task_id: str, urls: list[str]):
     completed = 0
     failed = 0
     filtered = 0
+    fallback_pending: list[dict] = []  # [{"url", "reason"}]，spec §6.1：不计完成也不计失败
     final_status = "failed"
     fatal_error: str | None = None
 
@@ -366,15 +410,23 @@ async def run_crawl_job(task_id: str, urls: list[str]):
                 ))
                 await domain_rate_limiter.acquire(url)
                 try:
-                    res = await _crawl_one(task_id, url, target_date=task.target_date, date_to=task.date_to)
+                    res = await _crawl_one(
+                        task_id, url,
+                        target_date=task.target_date, date_to=task.date_to,
+                        aibrowser_enabled=aibrowser_enabled, route_policy=route_policy,
+                    )
                 finally:
                     await domain_rate_limiter.release(url)
-            if isinstance(res, Exception):
-                failed += 1
-            elif isinstance(res, dict) and res.get("ok"):
+            kind = classify_result(res)
+            if kind == "done":
                 completed += 1
-            elif isinstance(res, dict) and (res.get("dedup") or res.get("filtered")):
+            elif kind == "filtered":
                 filtered += 1
+            elif kind == "fallback":
+                fallback_pending.append({
+                    "url": url,
+                    "reason": (res.get("reason") if isinstance(res, dict) else "") or "",
+                })
             else:
                 failed += 1
             # 断点续爬：标记此 URL 已处理（成功或失败都标记，避免重试死循环）
@@ -386,7 +438,7 @@ async def run_crawl_job(task_id: str, urls: list[str]):
             progress_bus.emit(ProgressEvent(
                 task_id=task_id, status="running",
                 completed=completed, failed=failed, total=total,
-                message="完成" if not isinstance(res, Exception) and isinstance(res, dict) and res.get("ok") else "失败",
+                message={"done": "完成", "filtered": "已过滤", "fallback": "待兜底"}.get(kind, "失败"),
             ))
             return res
 
@@ -467,25 +519,51 @@ async def run_crawl_job(task_id: str, urls: list[str]):
             for url, res in zip(urls, results):
                 if isinstance(res, (Exception, BaseException)):
                     new_failed.append({"url": url, "code": 5001, "reason": f"内部异常：{res!r}", "stage": "render"})
-                elif isinstance(res, dict) and not res.get("ok") and not res.get("dedup") and not res.get("filtered"):
+                elif res is not None and classify_result(res) == "failed":
                     new_failed.append({"url": url, "code": res.get("code", 2001), "reason": res.get("reason", "未知错误"), "stage": res.get("stage", "")})
+
             t.completed_urls = completed
             t.failed_urls = failed
             t.failed_details = list(t.failed_details or []) + new_failed
-            t.completed_at = datetime.now(timezone.utc)
+            t.fallback_total = len(fallback_pending) if aibrowser_enabled else 0
+            t.fallback_done = 0
+
             if task_id in _cancelled_tasks:
                 t.status = "cancelled"
                 _cancelled_tasks.discard(task_id)
-            elif failed == 0 and completed == 0 and filtered > 0:
-                t.status = "partial_failed"  # 全部被过滤，无实际入库文章
-            elif failed == 0:
-                t.status = "completed"
-            elif completed == 0:
-                t.status = "failed"
+                t.completed_at = datetime.now(timezone.utc)
+            elif fallback_pending and aibrowser_enabled:
+                # 常规结果先落地可见，任务停在非终态等兜底（spec §6.1）
+                t.status = "fallback_running"
             else:
-                t.status = "partial_failed"
+                t.status = settle_status(completed=completed, failed=failed, filtered=filtered)
+                t.completed_at = datetime.now(timezone.utc)
+
             final_status = t.status
             await session.commit()
+
+            # 落库待兜底队列（与任务状态同一次 commit 之后，失败不影响任务终态）
+            if t.status == "fallback_running":
+                try:
+                    for item in fallback_pending:
+                        session.add(FallbackQueue(
+                            task_id=task_id, url=item["url"],
+                            fail_reason=item["reason"], state="pending",
+                        ))
+                    await session.commit()
+                except Exception:
+                    logger.exception("enqueue fallback queue failed: task=%s", task_id)
+
+        # === 兜底：常规结果已可见，这里追加 AI Browser 结果 ===
+        if final_status == "fallback_running" and fallback_pending and aibrowser_enabled:
+            _emit_fallback_progress(task_id, 0, len(fallback_pending))
+            ab_ok, ab_fail = await _drain_fallback_queue(task_id, target_date=task.target_date)
+            # 这两行不能省：finally 里那条终态进度事件（service.py:523-528）直接引用
+            # completed / failed 两个局部变量，不累加就会向前端播报兜底前的旧计数
+            completed += ab_ok
+            failed += ab_fail
+            final_status = await _settle_after_fallback(task_id, ok=ab_ok) or final_status
+            await renderer.flush_render_stats()
 
         # 渲染统计落库（失败不影响主流程）
         await renderer.flush_render_stats()
@@ -501,7 +579,7 @@ async def run_crawl_job(task_id: str, urls: list[str]):
             try:
                 async with AsyncSessionLocal() as session:
                     t = await session.get(CrawlerTask, task_id)
-                    if t and t.status == "running":
+                    if t and t.status in ("running", "fallback_running"):
                         t.status = "failed"
                         t.completed_at = datetime.now(timezone.utc)
                         details = list(t.failed_details or [])
@@ -945,6 +1023,192 @@ async def _ai_analyze_dispatch(article_id: str):
     """延迟导入避免 ai 模块循环依赖。"""
     from app.modules.ai.service import analyze_article
     await analyze_article(article_id)
+
+
+# ====== 兜底队列（渲染链第 ④ 层的异步消费端） ======
+
+
+async def _claim_fallback_batch(task_id: str) -> list[tuple[str, str]]:
+    """原子认领该任务全部 pending 条目：一次 UPDATE 置 done 并返回 (id, url)。
+
+    先认领再执行，避免重启恢复时重复消费（spec §11）。
+    """
+    from sqlalchemy import update
+    from app.models.routing import FallbackQueue
+
+    async with AsyncSessionLocal() as session:
+        stmt = (
+            update(FallbackQueue)
+            .where(FallbackQueue.task_id == task_id, FallbackQueue.state == "pending")
+            .values(state="done")
+            .returning(FallbackQueue.id, FallbackQueue.url)
+        )
+        rows = (await session.execute(stmt)).all()
+        await session.commit()
+    return [(str(r[0]), r[1]) for r in rows]
+
+
+async def _mark_fallback_progress(
+    task_id: str, *, done: int, failed_ids: list[tuple[str, str]]
+) -> None:
+    """把失败条目落到 state='failed'，并把 fallback_done 推进到 done。"""
+    from app.models.routing import FallbackQueue
+
+    async with AsyncSessionLocal() as session:
+        for row_id, reason in failed_ids:
+            row = await session.get(FallbackQueue, row_id)
+            if row:
+                row.state = "failed"
+                row.fail_reason = reason
+        t = await session.get(CrawlerTask, task_id)
+        if t:
+            t.fallback_done = done
+        await session.commit()
+
+
+def _emit_fallback_progress(task_id: str, done: int, total: int) -> None:
+    progress_bus.emit(ProgressEvent(
+        task_id=task_id, status="fallback_running",
+        tier="aibrowser", fallback_done=done, fallback_total=total,
+        message=f"兜底中 {done}/{total}",
+    ))
+
+
+async def _drain_fallback_queue(task_id: str, *, target_date: date) -> tuple[int, int]:
+    """消费该任务已认领的兜底条目。返回 (入库成功数, 未入库数)。
+
+    并发固定 1（spec §6.3）：AI Browser 慢且贵，逐条串行。
+    """
+    claimed = await _claim_fallback_batch(task_id)
+    if not claimed:
+        return 0, 0
+
+    cfg = await ai_browser.load_ai_browser_config()
+    total = len(claimed)
+    ok_count = 0
+    fail_count = 0
+    failed_ids: list[tuple[str, str]] = []
+
+    for idx, (row_id, url) in enumerate(claimed, start=1):
+        if task_id in _cancelled_tasks:
+            break
+        article_id = None
+        try:
+            out = await ai_browser.browse_with_ai(url, **cfg)
+            if out.get("ok"):
+                article_id = await _store_ai_browsed_article(
+                    task_id=task_id,
+                    url=url,
+                    title=out.get("title", ""),
+                    content=out.get("content", ""),
+                    source=out.get("source"),
+                    date_str=out.get("date_str"),
+                    target_date=target_date,
+                )
+        except Exception:
+            logger.exception("ai browser fallback failed: %s", url)
+
+        renderer.record_ab_result(url, fallback_mark_ok(article_id))
+        if fallback_mark_ok(article_id):
+            ok_count += 1
+        else:
+            fail_count += 1
+            failed_ids.append((row_id, FALLBACK_FAIL_REASON))
+
+        await _mark_fallback_progress(task_id, done=idx, failed_ids=failed_ids)
+        _emit_fallback_progress(task_id, idx, total)
+
+    return ok_count, fail_count
+
+
+async def resume_fallback_queues() -> int:
+    """启动扫描：恢复 state='pending' 且任务仍在 fallback_running 的队列（spec §6.2）。
+
+    注意 scan_stale_running_tasks 只扫 running/pending，不会把 fallback_running 任务
+    判死——所以这里必须自己做恢复，否则任务会永久挂住、前端一直转圈。
+    """
+    from app.models.routing import FallbackQueue
+
+    async with AsyncSessionLocal() as session:
+        res = await session.execute(
+            select(FallbackQueue.task_id)
+            .join(CrawlerTask, CrawlerTask.id == FallbackQueue.task_id)
+            .where(FallbackQueue.state == "pending", CrawlerTask.status == "fallback_running")
+            .distinct()
+        )
+        task_ids = [str(r) for r in res.scalars().all()]
+
+    for tid in task_ids:
+        try:
+            async with AsyncSessionLocal() as session:
+                t = await session.get(CrawlerTask, tid)
+                target_date = t.target_date if t else date.today()
+            ok, _ = await _drain_fallback_queue(tid, target_date=target_date)
+            await _settle_after_fallback(tid, ok=ok)
+        except Exception:
+            logger.exception("resume fallback queue failed: task=%s", tid)
+    if task_ids:
+        logger.info("startup: resumed %d fallback queues", len(task_ids))
+    return len(task_ids)
+
+
+async def _settle_after_fallback(task_id: str, *, ok: int) -> str | None:
+    """兜底跑完后，把兜底成功/失败数补进计数器并按既有规则结算终态。
+
+    只处理仍是 fallback_running 的任务；返回结算后的状态。
+    """
+    from app.models.routing import FallbackQueue
+
+    async with AsyncSessionLocal() as session:
+        t = await session.get(CrawlerTask, task_id)
+        if not t:
+            return None
+        res = await session.execute(
+            select(FallbackQueue).where(
+                FallbackQueue.task_id == task_id, FallbackQueue.state == "failed"
+            )
+        )
+        failed_rows = list(res.scalars().all())
+
+        details = list(t.failed_details or [])
+        known = {d.get("url") for d in details}
+        added = 0
+        for q in failed_rows:
+            if q.url in known:
+                continue
+            details.append({
+                "url": q.url, "code": 2001,
+                "reason": q.fail_reason or FALLBACK_FAIL_REASON, "stage": "aibrowser",
+            })
+            known.add(q.url)
+            added += 1
+        t.failed_details = details
+        t.failed_urls = (t.failed_urls or 0) + added
+        t.completed_urls = (t.completed_urls or 0) + ok
+        t.fallback_done = t.fallback_total or 0
+
+        if t.status == "fallback_running":
+            t.status = settle_status(
+                completed=t.completed_urls or 0,
+                failed=t.failed_urls or 0,
+                filtered=0,
+            )
+            t.completed_at = datetime.now(timezone.utc)
+        final = t.status
+        snapshot = (
+            t.completed_urls or 0, t.failed_urls or 0, t.total_urls or 0,
+            t.fallback_done or 0, t.fallback_total or 0,
+        )
+        await session.commit()
+
+    completed, failed, total, fb_done, fb_total = snapshot
+    progress_bus.emit(ProgressEvent(
+        task_id=task_id, status=final,
+        completed=completed, failed=failed, total=total,
+        fallback_done=fb_done, fallback_total=fb_total,
+        message=f"任务{final}",
+    ))
+    return final
 
 
 async def retry_failed_urls(task_id: str, session: AsyncSession) -> CrawlerTask | None:
