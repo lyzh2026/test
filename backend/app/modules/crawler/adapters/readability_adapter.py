@@ -287,9 +287,6 @@ class ReadabilityAdapter(SpiderAdapter):
 
         # Language detection (soft check)
         text_sample = (draft.raw_content or "")[:2000]
-        if len(text_sample) < 50:
-            return True  # Too short to detect reliably, pass through
-
         detected = _detect_language(text_sample)
         if detected and detected.lower() not in _EXPECTED_LANGS:
             logger.info("language mismatch: expected=zh detected=%s for title=%s",

@@ -1,7 +1,7 @@
 """Tests for ReadabilityAdapter quality improvements.
 
 Covers: content completeness check, Markdown output, image/attachment extraction,
-        language detection.
+        language detection, quality gate.
 """
 from datetime import date
 from unittest.mock import patch
@@ -208,7 +208,8 @@ class TestLanguageDetection:
     def test_chinese_accepted(self, adapter):
         draft = ArticleDraft(
             original_title="测试文章",
-            raw_content="这是一篇关于技术创新的中文文章，内容非常丰富。" * 10,
+            raw_content="这是一篇关于技术创新的中文文章，内容非常丰富。" * 30,
+            publish_date=date(2026, 9, 1),
         )
         assert adapter.validate(draft) is True
 
@@ -216,6 +217,7 @@ class TestLanguageDetection:
         draft = ArticleDraft(
             original_title="Test",
             raw_content="这是一段足够长的中文内容，用于通过语言检测。" * 20,
+            publish_date=date(2026, 9, 1),
         )
         assert adapter.validate(draft) is True
 
@@ -233,5 +235,47 @@ class TestLanguageDetection:
         draft = ArticleDraft(
             original_title="Test",
             raw_content="Too short",
+        )
+        assert adapter.validate(draft) is False
+
+
+# ---------------------------------------------------------------------------
+# Quality Gate
+# ---------------------------------------------------------------------------
+
+class TestQualityGate:
+    """质量门：正文偏短、缺发布日期累计扣分，score <= -2 时拒收。"""
+
+    def test_short_content_without_date_rejected(self, adapter):
+        # 440 字（<500 → -1）、无发布日期（-1）→ score = -2 → 拒收
+        draft = ArticleDraft(
+            original_title="测试文章",
+            raw_content="这是一段足够长的中文内容，用于通过语言检测。" * 20,
+        )
+        assert adapter.validate(draft) is False
+
+    def test_short_content_with_date_passes(self, adapter):
+        # 440 字（<500 → -1）、有发布日期 → score = -1 → 通过
+        draft = ArticleDraft(
+            original_title="测试文章",
+            raw_content="这是一段足够长的中文内容，用于通过语言检测。" * 20,
+            publish_date=date(2026, 9, 1),
+        )
+        assert adapter.validate(draft) is True
+
+    def test_medium_content_without_date_passes(self, adapter):
+        # 690 字（>=500 → 0）、无发布日期（-1）→ score = -1 → 通过
+        draft = ArticleDraft(
+            original_title="测试文章",
+            raw_content="这是一篇关于技术创新的中文文章，内容非常丰富。" * 30,
+        )
+        assert adapter.validate(draft) is True
+
+    def test_very_short_content_with_date_rejected(self, adapter):
+        # 230 字（<300 → -2），即便有发布日期仍 score = -2 → 拒收
+        draft = ArticleDraft(
+            original_title="测试文章",
+            raw_content="这是一篇关于技术创新的中文文章，内容非常丰富。" * 10,
+            publish_date=date(2026, 9, 1),
         )
         assert adapter.validate(draft) is False
