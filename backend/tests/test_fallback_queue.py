@@ -387,6 +387,9 @@ async def test_drain_emit_carries_task_counters():
     assert (ev.completed, ev.failed, ev.total) == (47, 2, 50)
     assert ev.status == "fallback_running"
     assert ev.fallback_done == 1
+    # 队列总数必须与任务总数分开：claimed 只有 1 条，task total 是 50
+    assert ev.fallback_total == 1
+    assert ev.message == "兜底中 1/1"
 
 
 @pytest.mark.asyncio

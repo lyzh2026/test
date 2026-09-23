@@ -566,7 +566,8 @@ async def run_crawl_job(task_id: str, urls: list[str]):
         # === 兜底：常规结果已可见，这里追加 AI Browser 结果 ===
         if final_status == "fallback_running" and fallback_pending and aibrowser_enabled:
             _emit_fallback_progress(
-                task_id, done=0, total=total, completed=completed, failed=failed,
+                task_id, done=0, total=total, fallback_total=len(fallback_pending),
+                completed=completed, failed=failed,
             )
             ab_ok, ab_fail = await _drain_fallback_queue(
                 task_id, target_date=task.target_date,
@@ -1089,17 +1090,18 @@ async def _mark_fallback_progress(
 
 
 def _emit_fallback_progress(
-    task_id: str, *, done: int, total: int, completed: int, failed: int
+    task_id: str, *, done: int, total: int, fallback_total: int, completed: int, failed: int
 ) -> None:
-    """兜底进度事件：`completed`/`failed`/`total` 是任务级计数，`done` 是兜底已处理条数。
+    """兜底进度事件：`completed`/`failed`/`total` 是任务级计数，`done`/`fallback_total` 是队列级。
 
-    三个任务级计数**必填且无默认值**：补 0 就会把前端面板打回「进度 0 / 0」。
+    任务级三个计数**必填且无默认值**：补 0 就会把前端面板打回「进度 0 / 0」。
+    `fallback_total` 必须与任务总数分开——徽标「兜底中 x/y」的分母是队列条数，不是任务 URL 总数。
     """
     progress_bus.emit(ProgressEvent(
         task_id=task_id, status="fallback_running",
         completed=completed, failed=failed, total=total,
-        tier="aibrowser", fallback_done=done, fallback_total=total,
-        message=f"兜底中 {done}/{total}",
+        tier="aibrowser", fallback_done=done, fallback_total=fallback_total,
+        message=f"兜底中 {done}/{fallback_total}",
     ))
 
 
@@ -1158,7 +1160,8 @@ async def _drain_fallback_queue(
         except Exception:
             logger.exception("fallback progress update failed: task=%s", task_id)
         _emit_fallback_progress(
-            task_id, done=idx, total=total, completed=completed, failed=failed,
+            task_id, done=idx, total=total, fallback_total=len(claimed),
+            completed=completed, failed=failed,
         )
 
     return ok_count, fail_count
