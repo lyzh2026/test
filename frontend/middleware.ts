@@ -20,6 +20,6 @@ export function middleware(req: NextRequest) {
 
 export const config = {
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|api/proxy/api/v1/auth/login|api/proxy/debug).*)',
+    '/((?!_next/static|_next/image|favicon.ico|api/proxy/api/v1/auth/login).*)',
   ],
 };

@@ -1,6 +1,8 @@
 import { cookies } from 'next/headers';
 
-const API_BASE = process.env.API_BASE_URL || 'http://localhost:8000';
+// SSR 统一走 Next 自身的代理路由（/api/proxy/*），不再直连后端，避免依赖 Docker 网络名。
+// SELF_ORIGIN 为回环地址：容器内由 Next 监听 3000（见 Dockerfile PORT=3000 / package.json start -p 3000）。
+const SELF_ORIGIN = process.env.INTERNAL_SELF_ORIGIN || 'http://127.0.0.1:3000';
 
 export type ApiEnvelope<T = unknown> = {
   code: number;
@@ -28,7 +30,7 @@ export async function serverFetch<T>(
     .map((c) => `${c.name}=${c.value}`)
     .join('; ');
 
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(`${SELF_ORIGIN}/api/proxy${path}`, {
     ...init,
     headers: {
       'Content-Type': 'application/json',

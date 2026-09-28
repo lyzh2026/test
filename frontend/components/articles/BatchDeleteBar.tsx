@@ -104,7 +104,7 @@ export function ArticleListClient({ items, total, limit, offset, prevHref, nextH
       {/* Batch action bar */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-3">
-          <label className="flex items-center gap-2 text-sm" style={{ color: '#6b7280' }} cursor-pointer>
+          <label className="flex items-center gap-2 text-sm cursor-pointer" style={{ color: '#6b7280' }}>
             <input
               type="checkbox"
               checked={selected.size === items.length && items.length > 0}

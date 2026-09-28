@@ -25,9 +25,11 @@ export function EmailSendButton({ articleId, compact, onDone }: { articleId: str
   const { toast } = useToast();
 
   useEffect(() => {
+    setLoading(true);
     api.get<{ items: DistConfig[] }>('/api/v1/distribution/configs/enabled')
       .then(d => setConfigs(d.items))
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setLoading(false));
   }, []);
 
   async function handleSend() {

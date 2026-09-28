@@ -347,7 +347,7 @@ export function DistributionPanel() {
               {previewLoading ? (
                 <p className="text-sm" style={{ color: '#9ca3af' }}>加载中…</p>
               ) : previewType === 'email' ? (
-                <iframe srcDoc={previewContent || ''} className="h-[60vh] w-full border-0 rounded" title="周报预览" />
+                <iframe srcDoc={previewContent || ''} sandbox="" className="h-[60vh] w-full border-0 rounded" title="周报预览" />
               ) : (
                 <pre className="whitespace-pre-wrap break-all rounded p-4 text-xs font-mono" style={{ background: '#f9fafb', color: '#6b7280' }}>
                   {previewContent}

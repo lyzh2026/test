@@ -1,19 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 
-type ProgressData = {
-  task_id: string;
-  status: string;
-  completed: number;
-  failed: number;
-  total: number;
-  current_url: string | null;
-  message: string | null;
-  tier?: string | null;
-  fallback_done?: number;
-  fallback_total?: number;
-};
-
 const TERMINAL_STATUSES = ['completed', 'failed', 'partial_failed', 'cancelled'];
 
 export function TaskProgress({
@@ -44,17 +31,10 @@ export function TaskProgress({
     fallbackDone: initialFallbackDone,
     fallbackTotal: initialFallbackTotal,
   });
-  const wsRef = useRef<WebSocket | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const statusRef = useRef(initialStatus);
-
-  // keep ref in sync so callbacks always read latest status
-  useEffect(() => {
-    statusRef.current = prog.status;
-  }, [prog.status]);
 
   // sync SSR props after router.refresh() — only when new status is terminal
-  // to avoid overwriting live WebSocket updates with stale SSR data
+  // to avoid overwriting live updates with stale SSR data
   useEffect(() => {
     if (TERMINAL_STATUSES.includes(initialStatus)) {
       setProg((prev) => ({
@@ -77,46 +57,6 @@ export function TaskProgress({
 
   useEffect(() => {
     if (TERMINAL_STATUSES.includes(initialStatus)) return;
-
-    function connectWs() {
-      const wsBase = (window as any).NEXT_PUBLIC_WS_URL
-        || `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`;
-      const ws = new WebSocket(`${wsBase}/api/v1/crawler/ws/task/${taskId}`);
-
-      ws.onmessage = (e) => {
-        try {
-          const data: ProgressData = JSON.parse(e.data);
-          setProg((prev) => ({
-            ...prev,
-            completed: data.completed ?? prev.completed,
-            failed: data.failed ?? prev.failed,
-            total: data.total ?? prev.total,
-            status: data.status ?? prev.status,
-            currentUrl: data.current_url ?? prev.currentUrl,
-            message: data.message ?? prev.message,
-            tier: data.tier ?? prev.tier,
-            fallbackDone: data.fallback_done ?? prev.fallbackDone,
-            fallbackTotal: data.fallback_total ?? prev.fallbackTotal,
-          }));
-          if (TERMINAL_STATUSES.includes(data.status)) {
-            ws.close();
-          }
-        } catch {
-          // ignore malformed messages
-        }
-      };
-
-      ws.onclose = () => {
-        wsRef.current = null;
-        if (!TERMINAL_STATUSES.includes(statusRef.current)) startPolling();
-      };
-
-      ws.onerror = () => {
-        ws.close();
-      };
-
-      wsRef.current = ws;
-    }
 
     function startPolling() {
       if (pollRef.current) return;
@@ -146,10 +86,9 @@ export function TaskProgress({
       }, 3000);
     }
 
-    connectWs();
+    startPolling();
 
     return () => {
-      wsRef.current?.close();
       if (pollRef.current) clearInterval(pollRef.current);
     };
   }, [taskId, initialStatus]);
