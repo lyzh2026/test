@@ -18,9 +18,10 @@ _LOGIN_WINDOW_SEC = 900  # 15 分钟
 
 
 def _client_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    if settings.TRUST_X_FORWARDED_FOR:
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
     return request.client.host if request.client else "unknown"
 
 
@@ -64,6 +65,7 @@ async def login(payload: LoginRequest, request: Request, response: Response):
         max_age=settings.SESSION_MAX_AGE,
         httponly=True,
         samesite="lax",
+        secure=settings.SESSION_COOKIE_SECURE,
         path="/",
     )
     return resp

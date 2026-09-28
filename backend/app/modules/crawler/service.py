@@ -172,7 +172,6 @@ async def submit_task(
     failed_details: list[dict] = []
 
     async def _validate_url(raw: str, dest: list[str], seen: set[str]):
-        nonlocal rules
         u = (raw or "").strip()
         if not u or u in seen:
             return
@@ -181,25 +180,6 @@ async def submit_task(
             await validate_url(u, rules)
             dest.append(u)
         except URLValidationError as e:
-            if e.code == 1004:
-                hostname = urlparse(u).hostname
-                if hostname:
-                    entry = AllowedDomain(
-                        domain_pattern=hostname,
-                        match_mode="suffix",
-                        enabled=True,
-                        auto_added=True,
-                        source="auto",
-                    )
-                    session.add(entry)
-                    await session.flush()
-                    rules = await _load_rules(session)
-                    try:
-                        await validate_url(u, rules)
-                        dest.append(u)
-                        return
-                    except URLValidationError:
-                        pass
             failed_details.append({"url": u, "code": e.code, "reason": e.message, "stage": "validate"})
 
     seen: set[str] = set()

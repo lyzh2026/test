@@ -16,6 +16,7 @@ from bs4 import BeautifulSoup
 from lxml import etree
 
 from app.modules.crawler.renderer import renderer
+from app.utils.url_validator import ssrf_request_hook
 from app.modules.discovery.frontier import URLFrontier
 from app.modules.discovery.link_extractor import (
     extract_all_links,
@@ -40,6 +41,9 @@ _DISCOVERY_CONCURRENCY = 5  # BFS 每层并发数
 # Sitemap 发现
 # ---------------------------------------------------------------------------
 _SITEMAP_NS = "http://www.sitemaps.org/schemas/sitemap/0.9"
+_SAFE_XML_PARSER = etree.XMLParser(
+    resolve_entities=False, no_network=True, load_dtd=False, huge_tree=False,
+)
 _SITEMAP_FETCH_TIMEOUT = 15.0
 _SITEMAP_MAX_URLS = 2000
 _SITEMAP_FETCH_CONCURRENCY = 5
@@ -406,7 +410,8 @@ async def _fetch_all_from_api(
             url = f"{url}{sep}offset={(page - 1) * ps}"
 
         try:
-            async with httpx.AsyncClient(timeout=_API_FETCH_TIMEOUT) as c:
+            async with httpx.AsyncClient(timeout=_API_FETCH_TIMEOUT,
+                                         event_hooks={"request": [ssrf_request_hook]}) as c:
                 resp = await c.get(url, headers={"User-Agent": "Mozilla/5.0 Chrome/120"})
                 if resp.status_code != 200:
                     if page > 1:
@@ -525,7 +530,8 @@ async def _render_listing_for_api(
 async def _fetch_text(url: str) -> str | None:
     """httpx 获取纯文本响应（绕过 fast_fetch 的 HTML 专有检查）。"""
     try:
-        async with httpx.AsyncClient(timeout=_SITEMAP_FETCH_TIMEOUT, follow_redirects=True) as c:
+        async with httpx.AsyncClient(timeout=_SITEMAP_FETCH_TIMEOUT, follow_redirects=True,
+                                     event_hooks={"request": [ssrf_request_hook]}) as c:
             resp = await c.get(url, headers={"User-Agent": "Mozilla/5.0 Chrome/120"})
             if resp.status_code == 200:
                 return resp.text
@@ -587,7 +593,7 @@ async def _parse_sitemap(
 
     try:
         # 解析 XML，容错命名空间
-        root = etree.fromstring(text.encode("utf-8"))
+        root = etree.fromstring(text.encode("utf-8"), parser=_SAFE_XML_PARSER)
         # 尝试带命名空间的查询
         ns = {"s": _SITEMAP_NS}
         url_elements = root.findall(".//s:url", ns)
@@ -761,7 +767,8 @@ _HEAD_PEEK_MAX_BYTES = 20000
 async def head_peek_date(url: str) -> date | None:
     """流式下载到 </head>，提取 meta 标签中的发布日期。"""
     try:
-        async with httpx.AsyncClient(timeout=_HEAD_PEEK_TIMEOUT, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=_HEAD_PEEK_TIMEOUT, follow_redirects=True,
+                                     event_hooks={"request": [ssrf_request_hook]}) as client:
             async with client.stream("GET", url, headers={"User-Agent": "Mozilla/5.0 Chrome/120"}) as response:
                 if response.status_code != 200:
                     return None

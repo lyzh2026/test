@@ -18,12 +18,19 @@ logger = logging.getLogger("shixun.distribution")
 router = APIRouter(prefix="/api/v1/distribution", tags=["distribution"])
 
 
+_SECRET_KEYS = ("smtp_pass",)
+
+
 def _serialize_config(item: DistributionConfig) -> dict:
+    config = dict(item.config or {})
+    for key in _SECRET_KEYS:
+        if config.get(key):
+            config[key] = ""
     return {
         "id": str(item.id),
         "channel_type": item.channel_type,
         "name": item.name,
-        "config": item.config,
+        "config": config,
         "enabled": item.enabled,
         "created_at": item.created_at.isoformat() if item.created_at else None,
         "updated_at": item.updated_at.isoformat() if item.updated_at else None,
@@ -107,7 +114,12 @@ async def update_config(
     if "name" in payload and payload["name"]:
         item.name = payload["name"].strip()
     if "config" in payload and payload["config"]:
-        item.config = payload["config"]
+        new_config = dict(payload["config"])
+        old_config = item.config or {}
+        for key in _SECRET_KEYS:
+            if not new_config.get(key) and old_config.get(key):
+                new_config[key] = old_config[key]
+        item.config = new_config
     if "enabled" in payload:
         item.enabled = bool(payload["enabled"])
     if "channel_type" in payload:

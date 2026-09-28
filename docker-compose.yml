@@ -43,6 +43,8 @@ services:
       DATABASE_URL_SYNC: postgresql+psycopg2://shixun:${POSTGRES_PASSWORD:-shixun_db_pwd_change_me}@postgres:5432/shixun
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
       SESSION_SECRET: ${SESSION_SECRET:-please_replace_with_random_64_char_string}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+      TRUST_X_FORWARDED_FOR: ${TRUST_X_FORWARDED_FOR:-false}
       MOONSHOT_API_KEY: ${MOONSHOT_API_KEY:-}
       MOONSHOT_BASE_URL: ${MOONSHOT_BASE_URL:-https://api.moonshot.cn/v1}
       MOONSHOT_MODEL: ${MOONSHOT_MODEL:-moonshot-v1-32k}

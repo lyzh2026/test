@@ -23,6 +23,7 @@ from playwright._impl._errors import TargetClosedError
 from app.core.config import settings
 from app.modules.crawler.proxy_pool import proxy_pool
 from app.modules.crawler.anti_detection import build_stealth_scripts, detect_blocking, random_viewport
+from app.utils.url_validator import URLValidationError, assert_public_url, ssrf_request_hook
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,20 @@ _USER_AGENTS = [
 
 def _random_ua() -> str:
     return random.choice(_USER_AGENTS)
+
+
+async def _page_ssrf_guard(route):
+    """Playwright 路由守卫：只校验主文档导航，拒绝内网目标（重定向后同样触发）。"""
+    if route.request.resource_type != "document":
+        await route.continue_()
+        return
+    try:
+        await assert_public_url(route.request.url)
+    except URLValidationError:
+        logger.warning("ssrf guard: abort document navigation → %s", route.request.url)
+        await route.abort()
+        return
+    await route.continue_()
 
 
 def _process_tree_mem_mb() -> float:
@@ -86,6 +101,7 @@ class DynamicRenderer:
                 timeout=httpx.Timeout(15.0, connect=10.0),
                 follow_redirects=True,
                 limits=httpx.Limits(max_connections=50, max_keepalive_connections=20),
+                event_hooks={"request": [ssrf_request_hook]},
             )
         if self._playwright is None:
             self._playwright = await async_playwright().start()
@@ -322,6 +338,9 @@ class DynamicRenderer:
                         context = self._shared_context
                         page = await context.new_page()
 
+                    # SSRF 防护：每次新建 page 时注册一次路由守卫（page 是新建的，不会重复注册）
+                    await page.route("**/*", _page_ssrf_guard)
+
                     # Stealth：注入增强反检测脚本
                     response_headers: dict = {}
                     if settings.RENDER_STEALTH_ENABLED:
@@ -460,6 +479,9 @@ class DynamicRenderer:
                         timezone_id="Asia/Shanghai",
                     )
                     page = await context.new_page()
+
+                    # SSRF 防护：主文档导航守卫
+                    await page.route("**/*", _page_ssrf_guard)
 
                     if settings.RENDER_STEALTH_ENABLED:
                         for script in build_stealth_scripts():

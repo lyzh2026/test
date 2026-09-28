@@ -5,6 +5,10 @@ from typing import List
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# 占位默认值：main.py 启动守卫据此判断用户是否忘记配置真实凭据
+_DEFAULT_SESSION_SECRET = "please_replace_with_random_64_char_string"
+_DEFAULT_ADMIN_PASSWORD = "admin123"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
@@ -15,10 +19,12 @@ class Settings(BaseSettings):
 
     # Auth
     ADMIN_USERNAME: str = "admin"
-    ADMIN_PASSWORD: str = "admin123"
-    SESSION_SECRET: str = "please_replace_with_random_64_char_string"
+    ADMIN_PASSWORD: str = _DEFAULT_ADMIN_PASSWORD
+    SESSION_SECRET: str = _DEFAULT_SESSION_SECRET
     SESSION_COOKIE_NAME: str = "shixun_session"
     SESSION_MAX_AGE: int = 60 * 60 * 24 * 7  # 7 天
+    SESSION_COOKIE_SECURE: bool = False  # 仅 HTTPS 部署时开启
+    TRUST_X_FORWARDED_FOR: bool = False  # 仅在受信反代已覆写 XFF 时开启
 
     # AI - Kimi (Moonshot)
     MOONSHOT_API_KEY: str = ""

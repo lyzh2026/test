@@ -7,11 +7,14 @@ from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.core.config import settings
+from app.core.config import (
+    _DEFAULT_ADMIN_PASSWORD,
+    _DEFAULT_SESSION_SECRET,
+    settings,
+)
 from app.core.database import AsyncSessionLocal
 from app.core.scheduler import scheduler
 from app.models.allowed_domain import AllowedDomain
@@ -59,6 +62,14 @@ async def _seed_allowed_domains():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 拒绝以默认占位凭据启动：会话密钥可预测 = 管理员会话可被伪造
+    if settings.SESSION_SECRET == _DEFAULT_SESSION_SECRET or settings.ADMIN_PASSWORD == _DEFAULT_ADMIN_PASSWORD:
+        raise RuntimeError(
+            "检测到默认占位凭据，已拒绝启动：SESSION_SECRET / ADMIN_PASSWORD 仍为默认值。"
+            "会话密钥可预测时，任何人都能离线伪造有效管理员会话 cookie。"
+            "请设置 SESSION_SECRET（建议 64 位随机串，如 `openssl rand -hex 32` 生成）与 ADMIN_PASSWORD，"
+            "方式：本地在 .env 中配置，容器部署通过环境变量注入（docker compose 读取 .env / 环境变量）。"
+        )
     await _seed_allowed_domains()
     await proxy_pool.startup(settings.proxy_list_parsed if settings.PROXY_ENABLED else [])
     await renderer.startup()
@@ -92,6 +103,8 @@ async def lifespan(app: FastAPI):
         dispatch_weekly_report,
         id="weekly_digest",
         trigger=CronTrigger(day_of_week="mon", hour=8, minute=30),
+        max_instances=1,
+        coalesce=True,
         replace_existing=True,
     )
     from app.modules.crawler.promotion import promote_render_policies
@@ -118,11 +131,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="拾讯后端", version="0.1.0", lifespan=lifespan)
 
-# 静态文件（上传的模板等）
+# 导出模板等上传文件的落盘目录（不对外提供静态访问）
 import os
 _static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
 os.makedirs(os.path.join(_static_dir, "templates"), exist_ok=True)
-app.mount("/static", StaticFiles(directory=_static_dir), name="static")
 
 
 @app.middleware("http")

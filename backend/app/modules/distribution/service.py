@@ -130,7 +130,16 @@ def _get_adapter(channel_type: str) -> DistributionAdapter | None:
     return None
 
 
+_dispatch_lock = asyncio.Lock()
+
+
 async def dispatch_weekly_report(force: bool = False):
+    """APScheduler 入口：串行化后生成并分发周报。"""
+    async with _dispatch_lock:
+        return await _dispatch_weekly_report_locked(force=force)
+
+
+async def _dispatch_weekly_report_locked(force: bool = False):
     """APScheduler 入口：生成并分发周报。force=True 跳过幂等检查。"""
     from app.core.database import AsyncSessionLocal
     from app.models.distribution import DistributionConfig, DistributionLog

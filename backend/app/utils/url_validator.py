@@ -90,3 +90,19 @@ async def validate_url(url: str, rules: Iterable[AllowedRule]) -> str:
     await _check_ssrf(hostname)
     _check_allowlist(hostname, rules)
     return hostname
+
+
+async def assert_public_url(url: str) -> str:
+    """仅做协议 + SSRF 内网校验，不做白名单校验。
+
+    用于重定向中间跳与浏览器导航：中间跳通常不是白名单域名，
+    套用白名单会破坏正常抓取（如 http→https 跳转、跳转到 CDN）。
+    """
+    hostname = _check_protocol(url)
+    await _check_ssrf(hostname)
+    return hostname
+
+
+async def ssrf_request_hook(request) -> None:
+    """httpx request 事件钩子：对每一跳请求（含重定向）做 SSRF 校验。"""
+    await assert_public_url(str(request.url))
